@@ -44,12 +44,12 @@ from dotenv import load_dotenv
 # .env 파일 로드
 load_dotenv()
 
-# API 키를 환경변수에서 가져오기 (기존 값은 폴백으로 사용)
+# API 키를 환경변수에서 가져오기 (폴백 값 제거 - 보안 강화)
 API_KEYS = {
-    "GEMINI": os.getenv("GEMINI_API_KEY_1", "AIzaSyCADxqkayictwOGe0BoXxO6aOGLbY6OZCY"),  # Google Gemini API 키
-    "CLAUDE": os.getenv("CLAUDE_API_KEY", "YOUR_CLAUDE_API_KEY_HERE"),  # Claude API 키
-    "OPENAI": os.getenv("OPENAI_API_KEY", "YOUR_OPENAI_API_KEY_HERE"),  # OpenAI API 키
-    "YOUTUBE": os.getenv("YOUTUBE_API_KEY", "AIzaSyDvZ407rdm6_nFtjc-25XWibBO9d3pRqEI")  # YouTube API 키
+    "GEMINI": os.getenv("GEMINI_API_KEY_1", ""),  # Google Gemini API 키
+    "CLAUDE": os.getenv("CLAUDE_API_KEY", ""),  # Claude API 키
+    "OPENAI": os.getenv("OPENAI_API_KEY", ""),  # OpenAI API 키
+    "YOUTUBE": os.getenv("YOUTUBE_API_KEY", "")  # YouTube API 키
 }
 
 # ========================================

@@ -955,7 +955,7 @@ def summarize(room: str, sender: str, msg: str):
     random_heart = random.choice(heart_emojis)
 
     # YouTube API로 영상 정보 가져오기
-    api_key = 'AIzaSyCOeKmicZxjiMEOmx_iuXXYgHZ-EJzjQXI'  # 제공된 API 키 사용
+    api_key = APIManager.get_next_gemini_key()  # APIManager에서 관리
     title = "제목 없음"
     channel_name = "채널 없음"
     view_count = 0
@@ -1268,7 +1268,7 @@ def web_summary(room: str, sender: str, msg: str):
         return f"⚠️ 페이지 내용을 추출할 수 없습니다.\n{url}"
     
     # Gemini로 요약
-    api_key = 'AIzaSyCOeKmicZxjiMEOmx_iuXXYgHZ-EJzjQXI'  # 제공된 API 키 사용
+    api_key = APIManager.get_next_gemini_key()  # APIManager에서 관리
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-1.5-flash')
     
@@ -3189,7 +3189,7 @@ def youtube_popular_all(room: str, sender: str, msg: str):
         import json
         
         # YouTube Data API v3 사용
-        api_key = "AIzaSyDvZ407rdm6_nFtjc-25XWibBO9d3pRqEI"
+        api_key = APIManager.get_youtube_key()
         
         # 한국 인기 동영상 가져오기
         url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&chart=mostPopular&regionCode=KR&maxResults=10&key={api_key}"
@@ -3306,7 +3306,7 @@ def youtube_popular_random(room: str, sender: str, msg: str):
         import random
         
         # YouTube Data API v3 사용
-        api_key = "AIzaSyDvZ407rdm6_nFtjc-25XWibBO9d3pRqEI"
+        api_key = APIManager.get_youtube_key()
         
         # 한국 인기 동영상 가져오기 (최대 50개)
         url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&chart=mostPopular&regionCode=KR&maxResults=50&key={api_key}"

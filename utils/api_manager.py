@@ -13,11 +13,12 @@ load_dotenv()
 class APIManager:
     """API 키 중앙 관리 클래스"""
     
-    # Google Gemini API 키 (3개 로테이션)
+    # Google Gemini API 키 (4개 로테이션)
     GEMINI_API_KEYS: List[str] = [
         os.getenv('GEMINI_API_KEY_1', ''),
         os.getenv('GEMINI_API_KEY_2', ''),
-        os.getenv('GEMINI_API_KEY_3', '')
+        os.getenv('GEMINI_API_KEY_3', ''),
+        os.getenv('GEMINI_API_KEY_4', '')
     ]
     
     # Perplexity API 키 (2개 로테이션)
