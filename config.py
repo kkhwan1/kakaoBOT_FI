@@ -104,6 +104,22 @@ def get_special_user_response(sender):
     return None
 
 # ========================================
+# 데이터베이스 설정
+# ========================================
+
+DB_CONFIG = {
+    "host": os.getenv("DB_HOST", "localhost"),
+    "port": int(os.getenv("DB_PORT", "3306")),
+    "user": os.getenv("DB_USER", "root"),
+    "password": os.getenv("DB_PASSWORD", ""),
+    "database": os.getenv("DB_NAME", "kakaobot"),
+    "charset": "utf8mb4",
+    "autocommit": True,
+    "pool_size": 5,
+    "max_overflow": 10
+}
+
+# ========================================
 # ngrok URL 관리
 # ========================================
 
