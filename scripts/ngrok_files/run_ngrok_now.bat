@@ -1,0 +1,3 @@
+@echo off
+echo Starting ngrok on port 8002...
+"C:\Users\USER\Downloads\ngrok-v3-stable-windows-amd64 (1)\ngrok.exe" http 8002
