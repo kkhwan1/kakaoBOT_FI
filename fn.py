@@ -39,20 +39,13 @@ import naver
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ScrapingBee API 키 로테이션 관리 (API 키 #2는 한도 초과로 제외)
-SCRAPINGBEE_API_KEYS = [
-    'H6ZZY39QEYPNXEDFV5CR01GIINEDDM2OD9KO8NLRUQ2YQCLZV2TR8AYMG0MB5VRTL8A4KX2B7MM3OKRS',  # API #1 - 사용 가능
-    '9SN116PUKMK4JL7PPKHXZB42V9ASFBTGLUMSZ5QTZ8F7FM8MH5CRWELMXUFT8A258Z8U1NUAFYB3WKXQ'   # API #3 - 사용 가능
-    # 'FVQUD7NC9F1YKWNAFK74QFHHZ3GWGXAW5Y8F1TSUV7XSE3TVMI0FBMIMWPMDSRZ4J5M8R366XFOGA53C'  # API #2 - 한도 초과
-]
-SCRAPINGBEE_API_KEY_INDEX = 0  # 현재 사용 중인 API 키 인덱스
+# API 키 관리자 임포트
+from utils.api_manager import APIManager
 
+# ScrapingBee API 키 로테이션 함수 (API Manager 사용)
 def get_next_scrapingbee_key():
     """다음 ScrapingBee API 키를 로테이션하여 반환"""
-    global SCRAPINGBEE_API_KEY_INDEX
-    key = SCRAPINGBEE_API_KEYS[SCRAPINGBEE_API_KEY_INDEX]
-    SCRAPINGBEE_API_KEY_INDEX = (SCRAPINGBEE_API_KEY_INDEX + 1) % len(SCRAPINGBEE_API_KEYS)
-    return key
+    return APIManager.get_next_scrapingbee_key()
 
 # ========================================
 # 데이터베이스 함수들 (임시 구현)
@@ -114,18 +107,8 @@ def request(url, method="get", result="text", params=None, headers=None):
         log(f"웹 요청 오류: {e}")
         return None
 
-# Perplexity API 키 설정 (2개 로테이션)
-PERPLEXITY_API_KEYS = [
-    "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",
-    "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"
-]
-
-# Google Gemini API 키 설정 (3개 로테이션)
-GEMINI_API_KEYS = [
-    "AIzaSyCADxqkayictwOGe0BoXxO6aOGLbY6OZCY",  # 기존 키
-    "AIzaSyCXs1WH8VfJ9zssujrvYY5EGLnVVD9iJXo",  # 새 키 1
-    "AIzaSyCj8iaatqJXG60rAYR4i9avEUuSH53K-PI"   # 새 키 2
-]
+# API 키는 이제 utils.api_manager.APIManager에서 관리됩니다
+# 환경 변수 설정은 .env 파일을 참조하세요
 
 def clean_for_kakao(text):
     """카카오톡 메신저용 텍스트 정제 (메신저봇 호환성 강화)"""
@@ -274,7 +257,7 @@ def get_ai_answer(room, sender, msg):
     # 위에서 처리했으므로 아래 코드는 실행되지 않음
     if False:  # Perplexity 비활성화
         # 1. Perplexity API로 정보 검색
-        api_key = random.choice(PERPLEXITY_API_KEYS)
+        api_key = APIManager.get_next_perplexity_key()
         
         perplexity_response = None
         try:
@@ -538,15 +521,10 @@ def perplexity_chat(question, api_key):
             print(f"응답 내용: {e.response.text[:200]}")
         return None
 
-def gemini15_flash(system, question, api_key_index=None, use_search=True):
+def gemini15_flash(system, question, retry_count=0, use_search=True):
     """Gemini 2.0 Flash AI 함수 - Google Search 통합"""
-    # API 키 선택 (랜덤 또는 지정된 인덱스)
-    if api_key_index is None:
-        api_key = random.choice(GEMINI_API_KEYS)
-        current_index = GEMINI_API_KEYS.index(api_key)
-    else:
-        current_index = api_key_index % len(GEMINI_API_KEYS)
-        api_key = GEMINI_API_KEYS[current_index]
+    # APIManager를 통해 다음 API 키 가져오기
+    api_key = APIManager.get_next_gemini_key()
     
     try:
         # API 키 설정
@@ -607,23 +585,20 @@ Assistant:"""
             
             return text.strip()
         
-        # 현재 키 실패시 다음 키로 재시도
-        print(f"Gemini API 키 #{current_index + 1} 실패, 다음 키로 재시도")
-        next_index = (current_index + 1) % len(GEMINI_API_KEYS)
-        if next_index != current_index:
-            return gemini15_flash(system, question, next_index, use_search)
+        # 현재 키 실패시 다음 키로 재시도 (최대 3번)
+        if retry_count < 2:
+            print(f"Gemini API 키 실패, 다음 키로 재시도 (시도 {retry_count + 2}/3)")
+            return gemini15_flash(system, question, retry_count + 1, use_search)
         
         return None
         
     except Exception as e:
-        print(f"Gemini API 오류 (키 #{current_index + 1}): {e}")
+        print(f"Gemini API 오류: {e}")
         
-        # 다른 키로 재시도
-        if len(GEMINI_API_KEYS) > 1:
-            next_index = (current_index + 1) % len(GEMINI_API_KEYS)
-            if api_key_index is None:  # 첫 시도인 경우만 재시도
-                print(f"다른 Gemini 키로 재시도 (키 #{next_index + 1})")
-                return gemini15_flash(system, question, next_index, use_search)
+        # 다른 키로 재시도 (최대 3번)
+        if retry_count < 2:
+            print(f"다른 Gemini 키로 재시도 (시도 {retry_count + 2}/3)")
+            return gemini15_flash(system, question, retry_count + 1, use_search)
         
         return None
 
