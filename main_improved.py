@@ -37,8 +37,15 @@ executor = ThreadPoolExecutor(max_workers=3)
 # 설정
 import config
 import command_manager
-from fn import get_reply_msg
 from error_monitor import error_monitor
+
+# 새로운 모듈 구조 사용
+try:
+    from core.router import get_reply_msg
+    logger.info("✅ 새로운 모듈 구조 (core.router) 사용")
+except ImportError:
+    logger.warning("⚠️ core.router를 찾을 수 없음, fn.py에서 import")
+    from fn import get_reply_msg
 
 # 응답 캐시 (중복 요청 방지)
 response_cache = {}
