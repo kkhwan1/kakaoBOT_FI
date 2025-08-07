@@ -10,20 +10,44 @@ except ImportError:
     print("⚠️ fn.py를 찾을 수 없습니다. 핸들러 모듈을 개별적으로 import하세요.")
 
 # 점진적으로 이동된 핸들러들 (이것들이 fn.py의 함수를 오버라이드)
+# AI 핸들러
 try:
-    from .ai_handler import *
-except ImportError:
-    pass
+    from .ai_handler import (
+        get_ai_answer,
+        gemini15_flash,
+        perplexity_chat_fast,
+        claude3_haiku,
+        gpt4o_mini,
+        get_ai_greeting,
+        get_ai_style
+    )
+except ImportError as e:
+    print(f"AI handler import error: {e}")
 
+# 뉴스 핸들러
 try:
-    from .news_handler import *
-except ImportError:
-    pass
+    from .news_handler import (
+        economy_news,
+        it_news,
+        realestate_news,
+        search_news,
+        real_news
+    )
+except ImportError as e:
+    print(f"News handler import error: {e}")
 
+# 주식/금융 핸들러
 try:
-    from .stock_handler import *
-except ImportError:
-    pass
+    from .stock_handler import (
+        stock,
+        coin,
+        exchange,
+        gold,
+        stock_upper,
+        stock_lower
+    )
+except ImportError as e:
+    print(f"Stock handler import error: {e}")
 
 try:
     from .media_handler import *
