@@ -4047,11 +4047,12 @@ def whether_today(room: str, sender: str, msg: str):
         except:
             summary_msg = "오늘은 맑은 날씨가 예상됩니다. 🌞"
 
+        invisible_pad = '\u180e' * 500
         send_msg = f"""🌞 전국 날씨 요약 🌞
 ({dt} 기준)
 
 {summary_msg}
-👇 자세히 보기 👇{'\u180e'*500}
+👇 자세히 보기 👇{invisible_pad}
 
 [기상청 원문]
 {raw_msg}"""
