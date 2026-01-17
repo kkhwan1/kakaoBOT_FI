@@ -184,7 +184,7 @@ def search_news(room: str, sender: str, msg: str):
         import re
         for item in items[:5]:
             title = item.get('title', '')
-            link = item.get('originUrl') or item.get('link', '')
+            link = item.get('originallink') or item.get('link', '')
 
             # 네이버 뉴스 링크 변환
             if link and 'news.naver.com' in link:

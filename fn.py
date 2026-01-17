@@ -37,7 +37,8 @@ import config
 # import coupang  # 쿠팡 기능 제거됨 (API 차단)
 import naver
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# 보안: TLS 검증 활성화 (경고 비활성화 제거)
+# urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # API 키 관리자 임포트
 from utils.api_manager import APIManager
@@ -89,7 +90,8 @@ def request(url, method="get", result="text", params=None, headers=None):
     """웹 요청 함수"""
     try:
         if method.lower() == "get":
-            response = requests.get(url, params=params, headers=headers, verify=False, timeout=10)
+            # 보안: TLS 검증 활성화 (verify=True)
+            response = requests.get(url, params=params, headers=headers, verify=True, timeout=10)
             if result == "bs":
                 soup = bs(response.content, 'html.parser')
                 return soup
@@ -98,7 +100,8 @@ def request(url, method="get", result="text", params=None, headers=None):
             else:
                 return response.text
         elif method.lower() == "post":
-            response = requests.post(url, json=params, headers=headers, verify=False, timeout=10)
+            # 보안: TLS 검증 활성화 (verify=True)
+            response = requests.post(url, json=params, headers=headers, verify=True, timeout=10)
             if result == "json":
                 return response.json()
             else:

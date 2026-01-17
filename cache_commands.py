@@ -40,9 +40,10 @@ def cache_status(room: str, sender: str, msg: str):
         if cache_count > 0:
             message += "【최근 캐시 항목】\n"
             now = datetime.datetime.now()
-            
-            # 최근 10개만 표시
-            items = list(main_improved.response_cache.items())[-10:]
+
+            # 최근 10개만 표시 - 동시성 문제 방지를 위해 복사본 생성
+            cache_snapshot = dict(main_improved.response_cache)
+            items = list(cache_snapshot.items())[-10:]
             for key, (data, cached_time) in items:
                 # 키에서 명령어 추출
                 parts = key.split(':')

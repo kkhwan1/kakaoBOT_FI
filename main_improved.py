@@ -395,8 +395,10 @@ async def handle_message(request: Request):
         # 1. 요청 파싱
         body = await request.body()
         
-        # 요청 헤더 로깅
-        logger.debug(f"요청 헤더: {dict(request.headers)}")
+        # 요청 헤더 로깅 (민감 정보 마스킹)
+        safe_headers = {k: '***' if 'auth' in k.lower() or 'api' in k.lower() or 'key' in k.lower() else v
+                        for k, v in request.headers.items()}
+        logger.debug(f"요청 헤더: {safe_headers}")
         logger.debug(f"요청 메소드: {request.method}")
         logger.debug(f"Content-Type: {request.headers.get('content-type', 'None')}")
         logger.debug(f"Body 길이: {len(body)} bytes")
@@ -419,7 +421,8 @@ async def handle_message(request: Request):
                 except UnicodeDecodeError:
                     body_text = body.decode('cp949')
             
-            logger.debug(f"수신 원본: {body_text[:500] if body_text else 'Empty'}")
+            # 보안: 민감 정보 보호를 위해 길이만 로깅
+            logger.debug(f"수신 원본 길이: {len(body_text)} bytes")
             
             # JSON 파싱 시도
             try:
@@ -446,13 +449,14 @@ async def handle_message(request: Request):
         if msg and msg.startswith("/네이버부동산"):
             logger.info(f"네이버 부동산 명령어 감지: {msg}")
         
-        # 필수 필드 확인
-        if not room:
-            room = "이국환"  # 허용된 실제 방 이름으로 기본값 설정
-            logger.warning(f"room 필드 누락 - 기본값 사용: {room}")
-        if not sender:
-            sender = "이국환"  # 기본 sender 설정
-            logger.warning(f"sender 필드 누락 - 기본값 사용: {sender}")
+        # 필수 필드 확인 (보안: 권한 우회 방지를 위해 필수 필드 누락 시 거부)
+        if not room or not sender:
+            logger.error(f"필수 필드 누락 - room: {room}, sender: {sender}")
+            response_data["is_reply"] = False
+            response_data["reply_room"] = "system"
+            response_data["reply_msg"] = "❌ 인증 오류: 방과 발신자 정보가 필요합니다."
+            json_str = json.dumps(response_data, ensure_ascii=True)
+            return Response(content=json_str, media_type="application/json; charset=utf-8")
         if not msg:
             # msg가 비어있으면 빈 응답 반환
             logger.warning(f"msg 필드 누락 - 빈 메시지")
@@ -733,9 +737,19 @@ async def get_exchange_chart():
 
 @app.get("/charts/{filename}")
 async def get_saved_chart(filename: str):
-    """저장된 차트 이미지 제공"""
+    """저장된 차트 이미지 제공 - 경로 탐색 방지"""
     import os
-    file_path = os.path.join('charts', filename)
+    from pathlib import Path
+
+    # 경로 탐색 공격 방지 - 파일명만 추출
+    safe_filename = Path(filename).name
+    if safe_filename != filename or '/' in filename or '\\' in filename:
+        return Response(
+            content=b"Invalid filename",
+            status_code=400
+        )
+
+    file_path = os.path.join('charts', safe_filename)
     
     if os.path.exists(file_path):
         with open(file_path, 'rb') as f:
