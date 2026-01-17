@@ -6,8 +6,15 @@
 """
 
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from utils.debug_logger import debug_logger
+
+# 한국 시간대 (KST = UTC+9)
+KST = timezone(timedelta(hours=9))
+
+def get_kst_time():
+    """한국 시간 반환"""
+    return datetime.now(KST).strftime("%Y-%m-%d %H:%M")
 
 # request 함수를 fn.py에서 가져오기
 try:
@@ -37,101 +44,168 @@ except ImportError:
 
 
 def economy_news(room: str, sender: str, msg: str):
-    """경제 뉴스"""
-    area = 101
-    url = f'https://m.news.naver.com/main?mode=LSD&sid1={area}'
-    result = request(url, method="get", result="bs")
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-    send_msg = f"📰 경제 뉴스 📺\n📅 {current_time} 기준"
-    for item in result.select('li.sa_item'):
-        title = item.select_one('.sa_text_strong').text
-        link = item.select_one('.sa_text_title').get('href')
-        send_msg += f'\n\n{title}\n{link}'
-    return send_msg
+    """경제 뉴스 - 네이버 Open API 사용"""
+    return _category_news("경제", "경제", "부동산 주식 경제")
 
 
 def it_news(room: str, sender: str, msg: str):
-    """IT 뉴스"""
-    area = 105
-    url = f'https://m.news.naver.com/main?mode=LSD&sid1={area}'
-    result = request(url, method="get", result="bs")
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-    send_msg = f"📰 IT 뉴스 📺\n📅 {current_time} 기준"
-    for item in result.select('li.sa_item'):
-        title = item.select_one('.sa_text_strong').text
-        link = item.select_one('.sa_text_title').get('href')
-        send_msg += f'\n\n{title}\n{link}'
-    
-    return send_msg
+    """IT 뉴스 - 네이버 Open API 사용"""
+    return _category_news("IT", "IT과학", "테크 기술")
 
 
 def realestate_news(room: str, sender: str, msg: str):
-    """부동산 뉴스"""
-    # 네이버 뉴스 부동산 섹션 직접 접근
-    url = 'https://news.naver.com/breakingnews/section/101/260'
-    
+    """부동산 뉴스 - 네이버 Open API 사용"""
+    return _category_news("부동산", "부동산", "아파트 주택 집값")
+
+
+def _category_news(category_name: str, display_name: str, search_keywords: str):
+    """
+    카테고리별 뉴스 가져오기 - 네이버 Open API 사용
+
+    Args:
+        category_name: 카테고리 이름 (emoji용)
+        display_name: 표시 이름
+        search_keywords: 검색 키워드 (공백 구분)
+    """
+    # 네이버 Open API 키 가져오기
     try:
-        result = request(url, method="get", result="bs")
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-        send_msg = f"🏠 부동산 뉴스 📺\n📅 {current_time} 기준"
-        
-        # 뉴스 아이템 찾기 - 여러 선택자 시도
-        news_items = result.select('li.sa_item') or result.select('.sa_item')
-        
-        if news_items:
-            for item in news_items[:10]:  # 최대 10개
-                # 제목과 링크 추출
-                title_elem = item.select_one('.sa_text_strong') or item.select_one('a.sa_text_title strong')
-                link_elem = item.select_one('a.sa_text_title')
-                
-                if title_elem and link_elem:
-                    title = title_elem.text.strip()
-                    link = link_elem.get('href', '')
-                    
-                    # 링크가 상대경로인 경우 절대경로로 변환
-                    if link and not link.startswith('http'):
-                        link = 'https://n.news.naver.com' + link
-                    
-                    if title and link:
-                        send_msg += f'\n\n{title}\n{link}'
-        else:
-            # 대체 방법: 모바일 버전 사용
-            mobile_url = 'https://m.news.naver.com/rankingList?sid1=101&sid2=260'
-            result = request(mobile_url, method="get", result="bs")
-            current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-            send_msg = f"🏠 부동산 뉴스 📺\n📅 {current_time} 기준"
-            
-            news_items = result.select('li.sa_item')
-            if news_items:
-                for item in news_items[:10]:
-                    title = item.select_one('.sa_text_strong')
-                    link = item.select_one('.sa_text_title')
-                    
-                    if title and link:
-                        send_msg += f'\n\n{title.text.strip()}\n{link.get("href")}'
-            else:
-                # 최후의 방법: 네이버 검색 사용
-                search_url = 'https://search.naver.com/search.naver?where=news&query=부동산&sort=0&pd=1'
-                result = request(search_url, method="get", result="bs")
-                current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-                send_msg = f"🏠 부동산 뉴스 📺\n📅 {current_time} 기준"
-                
-                news_titles = result.select('.news_tit')
-                for title_elem in news_titles[:10]:
-                    title = title_elem.text.strip()
-                    link = title_elem.get('href', '')
-                    if title and link:
-                        send_msg += f'\n\n{title}\n{link}'
-        
-        # 뉴스를 하나도 못 찾은 경우
-        if send_msg == "🏠 부동산 뉴스 📺":
-            send_msg += "\n\n현재 부동산 뉴스를 불러올 수 없습니다."
-            
+        import os
+        client_id = os.getenv("NAVER_CLIENT_ID", "")
+        client_secret = os.getenv("NAVER_CLIENT_SECRET", "")
+
+        if not client_id or not client_secret:
+            debug_logger.error("네이버 API 키가 설정되지 않음")
+            return _fallback_category_news(category_name, display_name)
+    except ImportError:
+        return _fallback_category_news(category_name, display_name)
+
+    try:
+        # 네이버 Open API - 뉴스 검색
+        encode_keyword = urllib.parse.quote(search_keywords.split()[0])
+        url = f"https://openapi.naver.com/v1/search/news.json?query={encode_keyword}&display=5&sort=date"
+
+        headers = {
+            "X-Naver-Client-Id": client_id,
+            "X-Naver-Client-Secret": client_secret,
+        }
+
+        response = request(url, method="get", result="text", headers=headers)
+
+        if not response:
+            return _fallback_category_news(category_name, display_name)
+
+        import json
+        import re
+        data = json.loads(response)
+
+        if data.get('errorCode'):
+            debug_logger.error(f"네이버 API 오류: {data.get('errorMessage')}")
+            return _fallback_category_news(category_name, display_name)
+
+        items = data.get('items', [])
+
+        if not items:
+            return _fallback_category_news(category_name, display_name)
+
+        # 이모지 매핑
+        emoji_map = {"경제": "💰", "IT": "💻", "부동산": "🏠"}
+        emoji = emoji_map.get(category_name, "📰")
+
+        send_msg = f"{emoji} {display_name} 뉴스 📺\n📅 {get_kst_time()} 기준"
+
+        for idx, item in enumerate(items[:5], 1):
+            title = item.get('title', '')
+            description = item.get('description', '')
+            link = item.get('originallink') or item.get('link', '')
+            source = item.get('source', '')
+
+            # HTML 태그 및 특수 문자 제거
+            title = re.sub(r'<[^>]+>', '', title)
+            title = title.replace('&quot;', '"').replace('&apos;', "'")
+            title = title.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+            description = re.sub(r'<[^>]+>', '', description)
+            description = description.replace('&quot;', '"').replace('&apos;', "'")
+            description = description.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+
+            # 설명이 너무 길면 자르기
+            if len(description) > 100:
+                description = description[:97] + "..."
+
+            # 해시태그 생성 (설명에서 키워드 추출)
+            tags = []
+
+            # 출처 추가
+            if source:
+                tags.append(f"(출처:{source})")
+
+            # 설명에서 주요 키워드 추출 (2글자 이상 한글)
+            words = re.findall(r'[가-힣]{2,}', description)
+            unique_words = list(dict.fromkeys(words))[:3]  # 중복 제거, 최대 3개
+            for word in unique_words:
+                tags.append(f"#{word}")
+
+            tag_str = ' '.join(tags) if tags else ""
+
+            # 네이버 뉴스 링크 변환
+            if link and 'news.naver.com' in link:
+                match = re.search(r'/article/(\d+)/(\d+)', link)
+                if match:
+                    office_id, article_id = match.groups()
+                    link = f"https://n.news.naver.com/mnews/article/{office_id}/{article_id}"
+
+            # 메시지 구성
+            news_item = f"\n\n{idx}. {title}"
+            if description:
+                news_item += f"\n{description}"
+            if tag_str:
+                news_item += f"\n{tag_str}"
+            news_item += f"\n{link}"
+
+            send_msg += news_item
+
         return send_msg
-        
+
     except Exception as e:
-        debug_logger.error(f"부동산 뉴스 오류: {str(e)}")
-        return "🏠 부동산 뉴스를 불러오는 중 오류가 발생했습니다."
+        debug_logger.error(f"{display_name} 뉴스 오류: {str(e)}")
+        return _fallback_category_news(category_name, display_name)
+
+
+def _fallback_category_news(category_name: str, display_name: str):
+    """API 실패시 폴백 - 스크래핑 방식"""
+    emoji_map = {"경제": "💰", "IT": "💻", "부동산": "🏠"}
+    emoji = emoji_map.get(category_name, "📰")
+
+    # 카테고리별 URL 매핑
+    area_map = {"경제": 101, "IT": 105, "부동산": 260}
+    area = area_map.get(category_name, 101)
+
+    try:
+        if category_name == "부동산":
+            url = f'https://m.news.naver.com/rankingList?sid1=101&sid2={area}'
+        else:
+            url = f'https://m.news.naver.com/main?mode=LSD&sid1={area}'
+
+        result = request(url, method="get", result="bs")
+        send_msg = f"{emoji} {display_name} 뉴스 📺\n📅 {get_kst_time()} 기준"
+
+        news_items = result.select('li.sa_item')
+        if not news_items:
+            return f"{emoji} {display_name} 뉴스를 불러올 수 없습니다."
+
+        for idx, item in enumerate(news_items[:5], 1):
+            title_elem = item.select_one('.sa_text_strong')
+            link_elem = item.select_one('.sa_text_title')
+
+            if title_elem and link_elem:
+                title = title_elem.text.strip()
+                link = link_elem.get('href', '')
+                send_msg += f'\n\n{idx}. {title}\n{link}'
+
+        return send_msg
+
+    except Exception as e:
+        debug_logger.error(f"{display_name} 뉴스 폴백 오류: {str(e)}")
+        return f"{emoji} {display_name} 뉴스를 불러오는 중 오류가 발생했습니다."
 
 
 def search_news(room: str, sender: str, msg: str):
@@ -179,7 +253,7 @@ def search_news(room: str, sender: str, msg: str):
         if not items:
             return _search_news_google_fallback(keyword, request)
 
-        send_msg = f"📰 {keyword} 뉴스 📺"
+        send_msg = f"📰 {keyword} 뉴스 📺\n📅 {get_kst_time()} 기준"
 
         import re
         for item in items[:5]:
@@ -243,7 +317,7 @@ def _search_news_google_fallback(keyword: str, request_func) -> str:
         if not items:
             return f"'{keyword}'에 대한 뉴스를 찾을 수 없습니다."
 
-        send_msg = f"📰 {keyword} 뉴스 📺"
+        send_msg = f"📰 {keyword} 뉴스 📺\n📅 {get_kst_time()} 기준"
 
         for item in items:
             title = item.find('title')
