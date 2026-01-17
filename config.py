@@ -49,7 +49,9 @@ API_KEYS = {
     "GEMINI": os.getenv("GEMINI_API_KEY_1", ""),  # Google Gemini API 키
     "CLAUDE": os.getenv("CLAUDE_API_KEY", ""),  # Claude API 키
     "OPENAI": os.getenv("OPENAI_API_KEY", ""),  # OpenAI API 키
-    "YOUTUBE": os.getenv("YOUTUBE_API_KEY", "")  # YouTube API 키
+    "YOUTUBE": os.getenv("YOUTUBE_API_KEY", ""),  # YouTube API 키
+    "NAVER_CLIENT_ID": os.getenv("NAVER_CLIENT_ID", ""),  # 네이버 API 클라이언트 ID
+    "NAVER_CLIENT_SECRET": os.getenv("NAVER_CLIENT_SECRET", ""),  # 네이버 API 클라이언트 시크릿
 }
 
 # ========================================

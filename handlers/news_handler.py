@@ -135,20 +135,110 @@ def realestate_news(room: str, sender: str, msg: str):
 
 
 def search_news(room: str, sender: str, msg: str):
-    """뉴스 검색 - Google News RSS 사용"""
+    """뉴스 검색 - 네이버 Open API 사용"""
     keyword = msg.replace("/뉴스", "").strip()
     if not keyword:
         return "🔍 검색어를 입력해주세요 (사용법: /뉴스 키워드)"
 
-    # Google News RSS 사용
-    encode_keyword = urllib.parse.quote(keyword)
-    url = f'https://news.google.com/rss/search?q={encode_keyword}&hl=ko&gl=KR&ceid=KR:ko'
+    # 네이버 Open API 키 가져오기
+    try:
+        import os
+        client_id = os.getenv("NAVER_CLIENT_ID", "")
+        client_secret = os.getenv("NAVER_CLIENT_SECRET", "")
+
+        if not client_id or not client_secret:
+            debug_logger.error("네이버 API 키가 설정되지 않음")
+            return _search_news_google_fallback(keyword, request)
+    except ImportError:
+        return _search_news_google_fallback(keyword, request)
 
     try:
-        result = request(url, method="get", result="text")
+        # 네이버 Open API - 뉴스 검색
+        encode_keyword = urllib.parse.quote(keyword)
+        url = f"https://openapi.naver.com/v1/search/news.json?query={encode_keyword}&display=5&sort=date"
+
+        headers = {
+            "X-Naver-Client-Id": client_id,
+            "X-Naver-Client-Secret": client_secret,
+        }
+
+        response = request(url, method="get", result="text", headers=headers)
+
+        if not response:
+            return _search_news_google_fallback(keyword, request)
+
+        import json
+        data = json.loads(response)
+
+        if data.get('errorCode'):
+            debug_logger.error(f"네이버 API 오류: {data.get('errorMessage')}")
+            return _search_news_google_fallback(keyword, request)
+
+        items = data.get('items', [])
+
+        if not items:
+            return _search_news_google_fallback(keyword, request)
+
+        send_msg = f"📰 {keyword} 뉴스 📺"
+
+        import re
+        for item in items[:5]:
+            title = item.get('title', '')
+            link = item.get('originUrl') or item.get('link', '')
+
+            # 네이버 뉴스 링크 변환
+            if link and 'news.naver.com' in link:
+                match = re.search(r'/article/(\d+)/(\d+)', link)
+                if match:
+                    office_id, article_id = match.groups()
+                    link = f"https://n.news.naver.com/mnews/article/{office_id}/{article_id}"
+
+            # HTML 태그 및 특수 문자 제거
+            title = re.sub(r'<[^>]+>', '', title)
+            title = title.replace('&quot;', '"').replace('&apos;', "'")
+            title = title.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+
+            # 출처 추출
+            source_elem = item.get('description', '')
+            source_match = re.search(r'([가-힣A-Za-z]+)\s*\(', source_elem)
+            source = source_match.group(1) if source_match else ''
+            if not source:
+                source = item.get('source', '')
+
+            if title:
+                # 해시태그 생성
+                tags = []
+                keyword_parts = [w.strip() for w in keyword.split() if w.strip() and len(w) > 1]
+                for part in keyword_parts[:3]:
+                    tags.append(f"#{part}")
+
+                if source:
+                    tags.append(f"(출처:{source})")
+
+                tag_str = ' '.join(tags) if tags else ""
+
+                send_msg += f"\n\n{title}"
+                if tag_str:
+                    send_msg += f" {tag_str}"
+                send_msg += f"\n{link}"
+
+        return send_msg
+
+    except Exception as e:
+        debug_logger.error(f"뉴스 검색 오류 ({keyword}): {str(e)}")
+        return _search_news_google_fallback(keyword, request)
+
+
+def _search_news_google_fallback(keyword: str, request_func) -> str:
+    """Google News RSS 폴백"""
+    try:
+        encode_keyword = urllib.parse.quote(keyword)
+        url = f'https://news.google.com/rss/search?q={encode_keyword}&hl=ko&gl=KR&ceid=KR:ko'
+
+        result = request_func(url, method="get", result="text")
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(result, 'xml')
-        items = soup.find_all('item')[:5]  # 최대 5개
+        items = soup.find_all('item')[:5]
 
         if not items:
             return f"'{keyword}'에 대한 뉴스를 찾을 수 없습니다."
@@ -165,17 +255,15 @@ def search_news(room: str, sender: str, msg: str):
             source_text = source.text if source else ''
 
             if title_text:
-                # 해시태그 생성
                 tags = []
-                keyword_words = [w.strip() for w in keyword.split() if w.strip()]
-                for word in keyword_words[:2]:  # 최대 2개 단어
-                    if len(word) > 1:
-                        tags.append(f"#{word}")
+                keyword_words = [w.strip() for w in keyword.split() if w.strip() and len(w) > 1]
+                for word in keyword_words[:3]:
+                    tags.append(f"#{word}")
 
                 if source_text:
                     tags.append(f"(출처:{source_text})")
 
-                tag_str = ' '.join(tags) if tags else f"(출처:{source_text})" if source_text else ""
+                tag_str = ' '.join(tags) if tags else ""
 
                 send_msg += f"\n\n{title_text}"
                 if tag_str:
@@ -185,7 +273,7 @@ def search_news(room: str, sender: str, msg: str):
         return send_msg
 
     except Exception as e:
-        debug_logger.error(f"뉴스 검색 오류 ({keyword}): {str(e)}")
+        debug_logger.error(f"Google News 폴백 오류: {str(e)}")
         return f"'{keyword}' 뉴스 검색 중 오류가 발생했습니다."
 
 
