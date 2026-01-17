@@ -135,29 +135,58 @@ def realestate_news(room: str, sender: str, msg: str):
 
 
 def search_news(room: str, sender: str, msg: str):
-    """뉴스 검색"""
+    """뉴스 검색 - Google News RSS 사용"""
     keyword = msg.replace("/뉴스", "").strip()
+    if not keyword:
+        return "🔍 검색어를 입력해주세요 (사용법: /뉴스 키워드)"
+
+    # Google News RSS 사용
     encode_keyword = urllib.parse.quote(keyword)
-    url = f"https://s.search.naver.com/p/newssearch/2/search.naver?cluster_rank=69&de=&ds=&eid=&field=0&force_original=&is_dts=0&is_sug_officeid=0&mynews=0&news_office_checked=&nlu_query=&nqx_theme=%7B%22theme%22%3A%7B%22main%22%3A%7B%22name%22%3A%22corporation_hq%22%7D%2C%22sub%22%3A%5B%7B%22name%22%3A%22car_model%22%7D%2C%7B%22name%22%3A%22corporation_list%22%7D%2C%7B%22name%22%3A%22stock%22%7D%5D%7D%7D&nso=%26nso%3Dso%3Ar%2Cp%3Aall%2Ca%3Aall&nx_and_query=&nx_search_hlquery=&nx_search_query=&nx_sub_query=&office_category=0&office_section_code=0&office_type=0&pd=0&photo=0&query={encode_keyword}&query_original=&rev=31&service_area=0&sort=0&spq=0&start=31&where=news_tab_api&nso=so:r,p:all,a:all"
-    
-    result = request(url, method="get", result="json")
-    
-    news_api = result.get('contents', [])[0].get('json', {})
-    articles = news_api.get('moreContents', [{}])[0].get('contents', [])
-    
-    if not articles:
-        return f"'{keyword}'에 대한 뉴스를 찾을 수 없습니다."
-    
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-    send_msg = f"📰 {keyword} 뉴스 📺\n📅 {current_time} 기준"
-    
-    for article in articles[:10]:  # 최대 10개
-        title = article.get('title', '').replace("<mark>", "").replace("</mark>", "")
-        link = article.get('link', '')
-        if title and link:
-            send_msg += f'\n\n{title}\n{link}'
-    
-    return send_msg
+    url = f'https://news.google.com/rss/search?q={encode_keyword}&hl=ko&gl=KR&ceid=KR:ko'
+
+    try:
+        result = request(url, method="get", result="text")
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(result, 'xml')
+        items = soup.find_all('item')[:5]  # 최대 5개
+
+        if not items:
+            return f"'{keyword}'에 대한 뉴스를 찾을 수 없습니다."
+
+        send_msg = f"📰 {keyword} 뉴스 📺"
+
+        for item in items:
+            title = item.find('title')
+            link = item.find('link')
+            source = item.find('source')
+
+            title_text = title.text if title else ''
+            link_text = link.text if link else ''
+            source_text = source.text if source else ''
+
+            if title_text:
+                # 해시태그 생성
+                tags = []
+                keyword_words = [w.strip() for w in keyword.split() if w.strip()]
+                for word in keyword_words[:2]:  # 최대 2개 단어
+                    if len(word) > 1:
+                        tags.append(f"#{word}")
+
+                if source_text:
+                    tags.append(f"(출처:{source_text})")
+
+                tag_str = ' '.join(tags) if tags else f"(출처:{source_text})" if source_text else ""
+
+                send_msg += f"\n\n{title_text}"
+                if tag_str:
+                    send_msg += f" {tag_str}"
+                send_msg += f"\n{link_text}"
+
+        return send_msg
+
+    except Exception as e:
+        debug_logger.error(f"뉴스 검색 오류 ({keyword}): {str(e)}")
+        return f"'{keyword}' 뉴스 검색 중 오류가 발생했습니다."
 
 
 def real_news(room: str, sender: str, msg: str):

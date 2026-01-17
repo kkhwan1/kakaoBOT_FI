@@ -1,7 +1,7 @@
 // ===== 서버 URL 설정 =====
 // ngrok URL로 변경하세요 (예: https://abc123.ngrok-free.app)
 // start_server.ps1 실행 후 표시되는 URL을 여기에 입력
-var SERVER_URL = 'https://doberman-safe-heron.ngrok-free.app/api/kakaotalk';
+var SERVER_URL = 'https://seal-app-dk72t.ondigitalocean.app/api/kakaotalk';
 // 테스트용 localhost (메신저R이 PC에서 실행 중일 때만 사용)
 // var SERVER_URL = 'http://localhost:8002/api/kakaotalk';
 

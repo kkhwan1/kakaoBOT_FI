@@ -1801,35 +1801,58 @@ def realestate_news(room: str, sender: str, msg: str):
         return "🏠 부동산 뉴스를 불러오는 중 오류가 발생했습니다."
 
 def search_news(room: str, sender: str, msg: str):
+    """뉴스 검색 - Google News RSS 사용"""
     keyword = msg.replace("/뉴스", "").strip()
+    if not keyword:
+        return "🔍 검색어를 입력해주세요 (사용법: /뉴스 키워드)"
+
+    # Google News RSS 사용
     encode_keyword = urllib.parse.quote(keyword)
-    url = f"https://s.search.naver.com/p/newssearch/2/search.naver?cluster_rank=69&de=&ds=&eid=&field=0&force_original=&is_dts=0&is_sug_officeid=0&mynews=0&news_office_checked=&nlu_query=&nqx_theme=%7B%22theme%22%3A%7B%22main%22%3A%7B%22name%22%3A%22corporation_hq%22%7D%2C%22sub%22%3A%5B%7B%22name%22%3A%22car_model%22%7D%2C%7B%22name%22%3A%22corporation_list%22%7D%2C%7B%22name%22%3A%22stock%22%7D%5D%7D%7D&nso=%26nso%3Dso%3Ar%2Cp%3Aall%2Ca%3Aall&nx_and_query=&nx_search_hlquery=&nx_search_query=&nx_sub_query=&office_category=0&office_section_code=0&office_type=0&pd=0&photo=0&query={encode_keyword}&query_original=&rev=31&service_area=0&sort=0&spq=0&start=31&where=news_tab_api&nso=so:r,p:all,a:all"
-    
-    response = requests.get(url)
-    result = response.json()
-    
-    send_msg = f"📰 {keyword} 뉴스 📺"
-    for index, item in enumerate(result['collection'][0]['html'].split("<li class=\"bx\"")):
-        html_text = item.replace('\\', '')
-        doc = bs(html_text, 'html.parser')
-        
-        # 기사 제목
-        title = doc.select_one('a.news_tit')
-        if not title:
-            continue
-        title_text = title.get_text()
-        title_link = title['href']
-        
-        # 기사 시간
-        time_info = doc.select_one('div.info_group > span.info')
-        time_text = time_info.get_text() if time_info else ""
-        
-        send_msg += f"\n\n({time_text}) {title_text}\n{title_link}"
-        
-        if index == 2:
-            send_msg += ' ' + '\u180e'*500  # 메시지 길이 제한을 위한 빈 문자 추가
-    
-    return send_msg
+    url = f'https://news.google.com/rss/search?q={encode_keyword}&hl=ko&gl=KR&ceid=KR:ko'
+
+    try:
+        response = requests.get(url, timeout=10)
+        soup = bs(response.content, 'xml')
+        items = soup.find_all('item')[:5]  # 최대 5개
+
+        if not items:
+            return f"'{keyword}'에 대한 뉴스를 찾을 수 없습니다."
+
+        send_msg = f"📰 {keyword} 뉴스 📺"
+
+        for item in items:
+            title = item.title.text if item.title else ''
+            link = item.link.text if item.link else ''
+            source = item.source.text if item.source else ''
+
+            if title:
+                # 해시태그 생성
+                # 1. 검색 키워드에서 주요 단어 추출 (공백으로 구분)
+                tags = []
+                keyword_words = [w.strip() for w in keyword.split() if w.strip()]
+                for word in keyword_words[:2]:  # 최대 2개 단어
+                    if len(word) > 1:
+                        tags.append(f"#{word}")
+
+                # 2. 출처 정보
+                if source:
+                    tags.append(f"(출처:{source})")
+
+                tag_str = ' '.join(tags) if tags else f"(출처:{source})" if source else ""
+
+                send_msg += f"\n\n{title}"
+                if tag_str:
+                    send_msg += f" {tag_str}"
+                send_msg += f"\n{link}"
+
+        # 메시지 길이 제한을 위한 빈 문자 추가
+        send_msg += ' ' + '\u180e' * 500
+
+        return send_msg
+
+    except Exception as e:
+        debug_logger.error(f"뉴스 검색 오류 ({keyword}): {str(e)}")
+        return f"'{keyword}' 뉴스 검색 중 오류가 발생했습니다."
 
 def emoji(room: str, sender: str, msg: str):
     keyword = msg.replace("/이모지", "").strip()
