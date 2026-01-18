@@ -43,19 +43,315 @@ except ImportError:
             return None
 
 
+# 광고 필터링 키워드
+AD_KEYWORDS = [
+    '광고', 'AD', 'ad', '赞助', '広告', 'advert',
+    '유료', '협찬', '소개', '홍보', '기획기사',
+    '포장기사', '선정', 'Pick', 'PICK'
+]
+
+
+def _scrape_naver_section(section_url: str, display_name: str, emoji: str, use_mobile: bool = False) -> str:
+    """
+    네이버 섹션 페이지에서 뉴스 스크래핑 (광고 제거 필터 포함)
+
+    Args:
+        section_url: 네이버 섹션 URL
+        display_name: 표시 이름
+        emoji: 카테고리 이모지
+        use_mobile: 모바일 페이지 사용 여부
+    """
+    import re
+
+    try:
+        result = request(section_url, method="get", result="bs")
+        current_time = get_kst_time()
+
+        send_msg = f"{emoji} {display_name} 뉴스 📺\n📅 {current_time} 기준"
+
+        # 모바일 페이지인 경우
+        if use_mobile:
+            # 헤드라인 뉴스만 선택 (is_blind 제외)
+            news_items = result.select('li.sa_item._SECTION_HEADLINE:not(.is_blind)')
+            if not news_items:
+                # 폴백: 기존 셀렉터
+                news_items = result.select('li.sa_item')
+
+            if not news_items:
+                # 랭킹 페이지인 경우 직접 article 링크 사용
+                all_links = result.select('a[href*="article"]')
+
+                # 중복 제거하고 상위 10개만
+                seen = set()
+                for link in all_links:
+                    href = link.get('href', '')
+                    if href and href not in seen:
+                        seen.add(href)
+                        # 링크 바로 사용
+                        news_items = list(all_links)[:10]
+                        break
+
+            if not news_items:
+                return f"{emoji} {display_name} 뉴스를 불러올 수 없습니다."
+
+            # 상위 10개 (광고 제외)
+            count = 0
+            for item in news_items:
+                if count >= 10:
+                    break
+
+                # li 요소인 경우
+                source = ""
+                if item.name == 'li':
+                    title_elem = item.select_one('.sa_text_strong')
+                    link_elem = item.select_one('.sa_text_title')
+                    source_elem = item.select_one('.sa_text_press')
+                    if not title_elem:
+                        title_elem = item.select_one('.sa_text_title')
+                else:
+                    # a 요소 직접 사용 (랭킹 페이지)
+                    link_elem = item
+                    title_elem = item
+
+                if not link_elem:
+                    continue
+
+                title = title_elem.text.strip() if title_elem else ''
+                link = link_elem.get('href', '')
+                source = source_elem.text.strip() if source_elem else ''
+
+                # 출처에서 "언론사 선정", "기자" 등 텍스트 제거
+                if source:
+                    source = source.replace('언론사 선정', '').replace('기자', '').strip()
+
+                if not title or not link:
+                    continue
+
+                # 광고 필터링
+                is_ad = False
+                title_lower = title.lower()
+                link_lower = link.lower()
+                for ad_keyword in AD_KEYWORDS:
+                    if ad_keyword.lower() in title_lower or ad_keyword.lower() in link_lower:
+                        is_ad = True
+                        break
+
+                if is_ad:
+                    continue
+
+                # 해시태그 생성
+                tags = []
+                words = re.findall(r'[가-힣]{2,}', title)
+                unique_words = list(dict.fromkeys(words))[:3]
+                for word in unique_words:
+                    tags.append(f"#{word}")
+                tag_str = ' '.join(tags) if tags else ""
+
+                # 제목과 출처, URL 포맷
+                if source:
+                    send_msg += f"\n\n{title} ({source})"
+                else:
+                    send_msg += f"\n\n{title}"
+                send_msg += f"\n{tag_str}\n{link}"
+                count += 1
+
+            if count == 0:
+                return f"{emoji} {display_name} 뉴스를 불러올 수 없습니다."
+
+            return send_msg
+
+        # 데스크톱 페이지인 경우
+        # 메인 랭킹 뉴스 컨테이너 찾기
+        main_ranking = result.select_one('.rankingnews.as_type_flat._SECTION_MAINNEWS')
+
+        if main_ranking:
+            news_items = main_ranking.select('li')
+        else:
+            # 폴백: 모든 rankingnews에서 가져오기
+            all_ranking = result.select('.rankingnews li')
+            news_items = all_ranking
+
+        # 상위 10개 (광고 제외)
+        count = 0
+        for item in news_items:
+            if count >= 10:
+                break
+
+            # article 링크가 있는 a 태그 찾기
+            link_elem = item.select_one('a[href*="article"]')
+            if not link_elem:
+                continue
+
+            title = link_elem.text.strip()
+            link = link_elem.get('href', '')
+
+            # 출처 추출 시도
+            source_elem = item.select_one('.rankingnews_press')
+            source = source_elem.text.strip() if source_elem else ''
+            if source:
+                source = source.replace('언론사 선정', '').replace('기자', '').strip()
+
+            if not title or not link:
+                continue
+
+            # 광고 필터링
+            is_ad = False
+            title_lower = title.lower()
+            link_lower = link.lower()
+            for ad_keyword in AD_KEYWORDS:
+                if ad_keyword.lower() in title_lower or ad_keyword.lower() in link_lower:
+                    is_ad = True
+                    break
+
+            if is_ad:
+                continue
+
+            # 해시태그 생성
+            tags = []
+            words = re.findall(r'[가-힣]{2,}', title)
+            unique_words = list(dict.fromkeys(words))[:3]
+            for word in unique_words:
+                tags.append(f"#{word}")
+            tag_str = ' '.join(tags) if tags else ""
+
+            # 제목과 출처, URL 포맷
+            if source:
+                send_msg += f"\n\n{title} ({source})"
+            else:
+                send_msg += f"\n\n{title}"
+            send_msg += f"\n{tag_str}\n{link}"
+            count += 1
+
+        if count == 0:
+            return f"{emoji} {display_name} 뉴스를 불러올 수 없습니다."
+
+        return send_msg
+
+    except Exception as e:
+        debug_logger.error(f"{display_name} 스크래핑 오류: {str(e)}")
+        return f"{emoji} {display_name} 뉴스를 불러오는 중 오류가 발생했습니다."
+
+
 def economy_news(room: str, sender: str, msg: str):
-    """경제 뉴스 - 네이버 Open API 사용"""
-    return _category_news("경제", "경제", "부동산 주식 경제")
+    """경제 뉴스 - 스크래핑 방식 (모바일)"""
+    return _scrape_naver_section(
+        "https://m.news.naver.com/main?mode=LSD&sid1=101",
+        "경제",
+        "💰",
+        use_mobile=True
+    )
 
 
 def it_news(room: str, sender: str, msg: str):
-    """IT 뉴스 - 네이버 Open API 사용"""
-    return _category_news("IT", "IT과학", "테크 기술")
+    """IT 뉴스 - 스크래핑 방식 (모바일)"""
+    return _scrape_naver_section(
+        "https://m.news.naver.com/main?mode=LSD&sid1=105",
+        "IT",
+        "💻",
+        use_mobile=True
+    )
 
 
 def realestate_news(room: str, sender: str, msg: str):
-    """부동산 뉴스 - 네이버 Open API 사용"""
-    return _category_news("부동산", "부동산", "아파트 주택 집값")
+    """부동산 뉴스 - 네이버 부동산 섹션 직접 스크래핑"""
+    import re
+
+    try:
+        # 부동산 전용 섹션 URL (breakingnews)
+        url = "https://news.naver.com/breakingnews/section/101/260"
+        result = request(url, method="get", result="bs")
+        current_time = get_kst_time()
+
+        send_msg = f"🏠 부동산 뉴스 📺\n📅 {current_time} 기준"
+
+        # 부동산 섹션의 뉴스 아이템 가져오기
+        news_items = result.select('li.sa_item')
+
+        if not news_items:
+            return f"🏠 부동산 뉴스를 불러올 수 없습니다."
+
+        # 상위 10개 기사 추출
+        count = 0
+        seen = set()
+        ad_keywords_lower = [k.lower() for k in AD_KEYWORDS]
+
+        for item in news_items:
+            if count >= 10:
+                break
+
+            # 제목과 링크 추출
+            title_elem = item.select_one('.sa_text_strong')
+            link_elem = item.select_one('a[href*="article"]')
+            source_elem = item.select_one('.sa_text_press, .sa_text_info_left')
+
+            if not link_elem:
+                continue
+
+            # 제목이 없으면 링크 텍스트 사용
+            if title_elem:
+                title = title_elem.text.strip()
+            else:
+                title = link_elem.text.strip()
+
+            link = link_elem.get('href', '')
+
+            if not title or not link or link in seen:
+                continue
+
+            # 광고 필터링
+            is_ad = False
+            title_lower = title.lower()
+            for ad_keyword in ad_keywords_lower:
+                if ad_keyword in title_lower:
+                    is_ad = True
+                    break
+            if is_ad:
+                continue
+
+            seen.add(link)
+
+            # 출처 추출 및 정리
+            source = ''
+            if source_elem:
+                source = source_elem.text.strip()
+                # 시간 정보 제거 (예: "조선일보\n25분전" -> "조선일보")
+                source = source.split('\n')[0].strip()
+                source = source.replace('언론사 선정', '').replace('기자', '').strip()
+
+            # 해시태그 생성
+            tags = []
+            words = re.findall(r'[가-힣]{2,}', title)
+            unique_words = list(dict.fromkeys(words))[:3]
+            for word in unique_words:
+                tags.append(f"#{word}")
+            tag_str = ' '.join(tags) if tags else ""
+
+            # 메시지 구성
+            if source:
+                send_msg += f"\n\n{title} ({source})"
+            else:
+                send_msg += f"\n\n{title}"
+            send_msg += f"\n{tag_str}\n{link}"
+            count += 1
+
+        if count == 0:
+            return f"🏠 부동산 뉴스를 불러올 수 없습니다."
+
+        return send_msg
+
+    except Exception as e:
+        debug_logger.error(f"부동산 뉴스 스크래핑 오류: {str(e)}")
+        return f"🏠 부동산 뉴스를 불러오는 중 오류가 발생했습니다."
+
+
+def world_news(room: str, sender: str, msg: str):
+    """세계 뉴스 - 스크래핑 방식 (모바일)"""
+    return _scrape_naver_section(
+        "https://m.news.naver.com/main?mode=LSD&sid1=104",
+        "세계",
+        "🌍",
+        use_mobile=True
+    )
 
 
 def _category_news(category_name: str, display_name: str, search_keywords: str):
@@ -113,9 +409,8 @@ def _category_news(category_name: str, display_name: str, search_keywords: str):
 
         send_msg = f"{emoji} {display_name} 뉴스 📺\n📅 {get_kst_time()} 기준"
 
-        for idx, item in enumerate(items[:5], 1):
+        for item in items[:10]:
             title = item.get('title', '')
-            description = item.get('description', '')
             link = item.get('originallink') or item.get('link', '')
             source = item.get('source', '')
 
@@ -123,23 +418,10 @@ def _category_news(category_name: str, display_name: str, search_keywords: str):
             title = re.sub(r'<[^>]+>', '', title)
             title = title.replace('&quot;', '"').replace('&apos;', "'")
             title = title.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
-            description = re.sub(r'<[^>]+>', '', description)
-            description = description.replace('&quot;', '"').replace('&apos;', "'")
-            description = description.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
 
-            # 설명이 너무 길면 자르기
-            if len(description) > 100:
-                description = description[:97] + "..."
-
-            # 해시태그 생성 (설명에서 키워드 추출)
+            # 해시태그 생성 (제목에서 키워드 추출)
             tags = []
-
-            # 출처 추가
-            if source:
-                tags.append(f"(출처:{source})")
-
-            # 설명에서 주요 키워드 추출 (2글자 이상 한글)
-            words = re.findall(r'[가-힣]{2,}', description)
+            words = re.findall(r'[가-힣]{2,}', title)
             unique_words = list(dict.fromkeys(words))[:3]  # 중복 제거, 최대 3개
             for word in unique_words:
                 tags.append(f"#{word}")
@@ -153,13 +435,13 @@ def _category_news(category_name: str, display_name: str, search_keywords: str):
                     office_id, article_id = match.groups()
                     link = f"https://n.news.naver.com/mnews/article/{office_id}/{article_id}"
 
-            # 메시지 구성
-            news_item = f"\n\n{idx}. {title}"
-            if description:
-                news_item += f"\n{description}"
-            if tag_str:
-                news_item += f"\n{tag_str}"
-            news_item += f"\n{link}"
+            # 메시지 구성: 제목(출처) 형식
+            if source:
+                news_item = f"\n\n{title}({source})"
+            else:
+                news_item = f"\n\n{title}"
+
+            news_item += f"\n{tag_str}\n{link}"
 
             send_msg += news_item
 
@@ -188,18 +470,22 @@ def _fallback_category_news(category_name: str, display_name: str):
         result = request(url, method="get", result="bs")
         send_msg = f"{emoji} {display_name} 뉴스 📺\n📅 {get_kst_time()} 기준"
 
-        news_items = result.select('li.sa_item')
+        # 헤드라인 뉴스만 선택 (is_blind 제외)
+        news_items = result.select('li.sa_item._SECTION_HEADLINE:not(.is_blind)')
+        if not news_items:
+            # 폴백: 기존 셀렉터
+            news_items = result.select('li.sa_item')
         if not news_items:
             return f"{emoji} {display_name} 뉴스를 불러올 수 없습니다."
 
-        for idx, item in enumerate(news_items[:5], 1):
+        for item in news_items[:10]:
             title_elem = item.select_one('.sa_text_strong')
             link_elem = item.select_one('.sa_text_title')
 
             if title_elem and link_elem:
                 title = title_elem.text.strip()
                 link = link_elem.get('href', '')
-                send_msg += f'\n\n{idx}. {title}\n{link}'
+                send_msg += f'\n\n{title}\n{link}'
 
         return send_msg
 
@@ -208,176 +494,3 @@ def _fallback_category_news(category_name: str, display_name: str):
         return f"{emoji} {display_name} 뉴스를 불러오는 중 오류가 발생했습니다."
 
 
-def search_news(room: str, sender: str, msg: str):
-    """뉴스 검색 - 네이버 Open API 사용"""
-    keyword = msg.replace("/뉴스", "").strip()
-    if not keyword:
-        return "🔍 검색어를 입력해주세요 (사용법: /뉴스 키워드)"
-
-    # 네이버 Open API 키 가져오기
-    try:
-        import os
-        client_id = os.getenv("NAVER_CLIENT_ID", "")
-        client_secret = os.getenv("NAVER_CLIENT_SECRET", "")
-
-        if not client_id or not client_secret:
-            debug_logger.error("네이버 API 키가 설정되지 않음")
-            return _search_news_google_fallback(keyword, request)
-    except ImportError:
-        return _search_news_google_fallback(keyword, request)
-
-    try:
-        # 네이버 Open API - 뉴스 검색
-        encode_keyword = urllib.parse.quote(keyword)
-        url = f"https://openapi.naver.com/v1/search/news.json?query={encode_keyword}&display=5&sort=date"
-
-        headers = {
-            "X-Naver-Client-Id": client_id,
-            "X-Naver-Client-Secret": client_secret,
-        }
-
-        response = request(url, method="get", result="text", headers=headers)
-
-        if not response:
-            return _search_news_google_fallback(keyword, request)
-
-        import json
-        data = json.loads(response)
-
-        if data.get('errorCode'):
-            debug_logger.error(f"네이버 API 오류: {data.get('errorMessage')}")
-            return _search_news_google_fallback(keyword, request)
-
-        items = data.get('items', [])
-
-        if not items:
-            return _search_news_google_fallback(keyword, request)
-
-        send_msg = f"📰 {keyword} 뉴스 📺\n📅 {get_kst_time()} 기준"
-
-        import re
-        for item in items[:5]:
-            title = item.get('title', '')
-            link = item.get('originallink') or item.get('link', '')
-
-            # 네이버 뉴스 링크 변환
-            if link and 'news.naver.com' in link:
-                match = re.search(r'/article/(\d+)/(\d+)', link)
-                if match:
-                    office_id, article_id = match.groups()
-                    link = f"https://n.news.naver.com/mnews/article/{office_id}/{article_id}"
-
-            # HTML 태그 및 특수 문자 제거
-            title = re.sub(r'<[^>]+>', '', title)
-            title = title.replace('&quot;', '"').replace('&apos;', "'")
-            title = title.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
-
-            # 출처 추출
-            source_elem = item.get('description', '')
-            source_match = re.search(r'([가-힣A-Za-z]+)\s*\(', source_elem)
-            source = source_match.group(1) if source_match else ''
-            if not source:
-                source = item.get('source', '')
-
-            if title:
-                # 해시태그 생성
-                tags = []
-                keyword_parts = [w.strip() for w in keyword.split() if w.strip() and len(w) > 1]
-                for part in keyword_parts[:3]:
-                    tags.append(f"#{part}")
-
-                if source:
-                    tags.append(f"(출처:{source})")
-
-                tag_str = ' '.join(tags) if tags else ""
-
-                send_msg += f"\n\n{title}"
-                if tag_str:
-                    send_msg += f" {tag_str}"
-                send_msg += f"\n{link}"
-
-        return send_msg
-
-    except Exception as e:
-        debug_logger.error(f"뉴스 검색 오류 ({keyword}): {str(e)}")
-        return _search_news_google_fallback(keyword, request)
-
-
-def _search_news_google_fallback(keyword: str, request_func) -> str:
-    """Google News RSS 폴백"""
-    try:
-        encode_keyword = urllib.parse.quote(keyword)
-        url = f'https://news.google.com/rss/search?q={encode_keyword}&hl=ko&gl=KR&ceid=KR:ko'
-
-        result = request_func(url, method="get", result="text")
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(result, 'xml')
-        items = soup.find_all('item')[:5]
-
-        if not items:
-            return f"'{keyword}'에 대한 뉴스를 찾을 수 없습니다."
-
-        send_msg = f"📰 {keyword} 뉴스 📺\n📅 {get_kst_time()} 기준"
-
-        for item in items:
-            title = item.find('title')
-            link = item.find('link')
-            source = item.find('source')
-
-            title_text = title.text if title else ''
-            link_text = link.text if link else ''
-            source_text = source.text if source else ''
-
-            if title_text:
-                tags = []
-                keyword_words = [w.strip() for w in keyword.split() if w.strip() and len(w) > 1]
-                for word in keyword_words[:3]:
-                    tags.append(f"#{word}")
-
-                if source_text:
-                    tags.append(f"(출처:{source_text})")
-
-                tag_str = ' '.join(tags) if tags else ""
-
-                send_msg += f"\n\n{title_text}"
-                if tag_str:
-                    send_msg += f" {tag_str}"
-                send_msg += f"\n{link_text}"
-
-        return send_msg
-
-    except Exception as e:
-        debug_logger.error(f"Google News 폴백 오류: {str(e)}")
-        return f"'{keyword}' 뉴스 검색 중 오류가 발생했습니다."
-
-
-def real_news(room: str, sender: str, msg: str):
-    """실시간 뉴스"""
-    url = 'https://news.naver.com/section/template/MOBILE_RANKING_ARTICLE'
-    
-    try:
-        result = request(url, method="get", result="json")
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-        
-        # 뉴스 데이터 추출
-        news_list = result.get('renderedComponent', {}).get('props', {}).get('rankingArticleList', [])
-        
-        if not news_list:
-            return "실시간 뉴스를 불러올 수 없습니다."
-        
-        send_msg = f"📰 실시간 인기 뉴스\n📅 {current_time} 기준\n"
-        
-        for idx, article in enumerate(news_list[:10], 1):
-            title = article.get('title', '').strip()
-            article_id = article.get('articleId', '')
-            
-            if title and article_id:
-                # 네이버 뉴스 링크 형식
-                link = f"https://n.news.naver.com/article/{article_id}"
-                send_msg += f"\n{idx}. {title}\n{link}\n"
-        
-        return send_msg.strip()
-        
-    except Exception as e:
-        debug_logger.error(f"실시간 뉴스 오류: {str(e)}")
-        return "실시간 뉴스를 불러오는 중 오류가 발생했습니다."
