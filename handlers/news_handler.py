@@ -71,25 +71,26 @@ def _scrape_naver_section(section_url: str, display_name: str, emoji: str, use_m
 
         # 모바일 페이지인 경우
         if use_mobile:
-            # 헤드라인 뉴스만 선택 (is_blind 제외)
-            news_items = result.select('li.sa_item._SECTION_HEADLINE:not(.is_blind)')
-            if not news_items:
-                # 폴백: 기존 셀렉터
-                news_items = result.select('li.sa_item')
+            # 헤드라인 뉴스 먼저 선택
+            news_items = result.select('li.sa_item._SECTION_HEADLINE')
 
-            if not news_items:
-                # 랭킹 페이지인 경우 직접 article 링크 사용
-                all_links = result.select('a[href*="article"]')
+            # 헤드라인이 10개 미만이면 일반 뉴스에서 추가
+            if len(news_items) < 10:
+                all_items = result.select('li.sa_item')
+                # 헤드라인에 없는 일반 뉴스 추가
+                headline_links = set()
+                for item in news_items:
+                    link_elem = item.select_one('a[href*="article"]')
+                    if link_elem:
+                        headline_links.add(link_elem.get('href', ''))
 
-                # 중복 제거하고 상위 10개만
-                seen = set()
-                for link in all_links:
-                    href = link.get('href', '')
-                    if href and href not in seen:
-                        seen.add(href)
-                        # 링크 바로 사용
-                        news_items = list(all_links)[:10]
+                for item in all_items:
+                    if len(news_items) >= 15:  # 충분히 확보
                         break
+                    link_elem = item.select_one('a[href*="article"]')
+                    if link_elem and link_elem.get('href', '') not in headline_links:
+                        news_items.append(item)
+                        headline_links.add(link_elem.get('href', ''))
 
             if not news_items:
                 return f"{emoji} {display_name} 뉴스를 불러올 수 없습니다."
@@ -470,8 +471,8 @@ def _fallback_category_news(category_name: str, display_name: str):
         result = request(url, method="get", result="bs")
         send_msg = f"{emoji} {display_name} 뉴스 📺\n📅 {get_kst_time()} 기준"
 
-        # 헤드라인 뉴스만 선택 (is_blind 제외)
-        news_items = result.select('li.sa_item._SECTION_HEADLINE:not(.is_blind)')
+        # 헤드라인 뉴스만 선택
+        news_items = result.select('li.sa_item._SECTION_HEADLINE')
         if not news_items:
             # 폴백: 기존 셀렉터
             news_items = result.select('li.sa_item')

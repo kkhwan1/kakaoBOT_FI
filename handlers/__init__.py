@@ -30,8 +30,7 @@ try:
         economy_news,
         it_news,
         realestate_news,
-        search_news,
-        real_news
+        world_news
     )
 except ImportError as e:
     print(f"News handler import error: {e}")
