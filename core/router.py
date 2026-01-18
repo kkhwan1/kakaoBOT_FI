@@ -41,7 +41,7 @@ def get_reply_msg(room: str, sender: str, msg: str):
         # AI 핸들러
         get_ai_answer,
         # 뉴스 핸들러
-        economy_news, it_news, realestate_news, search_news, real_news,
+        economy_news, it_news, realestate_news, world_news,
         # 주식/금융 핸들러
         stock, coin, exchange, gold, stock_upper, stock_lower,
         # 미디어 핸들러
@@ -112,9 +112,7 @@ def get_reply_msg(room: str, sender: str, msg: str):
     # 실시간 정보
     elif msg in ["/실시간검색어", '/검색어']:
         return real_keyword(room, sender, msg)
-    elif msg in ["/실시간뉴스"]:
-        return real_news(room, sender, msg)
-    
+
     # 뉴스
     elif msg.upper() == '/IT뉴스':
         return it_news(room, sender, msg)
@@ -122,9 +120,9 @@ def get_reply_msg(room: str, sender: str, msg: str):
         return economy_news(room, sender, msg)
     elif msg == '/부동산뉴스':
         return realestate_news(room, sender, msg)
-    elif msg.startswith("/뉴스"):
-        return search_news(room, sender, msg)
-    
+    elif msg == '/세계뉴스':
+        return world_news(room, sender, msg)
+
     # 검색
     elif msg.startswith("/블로그"):
         return search_blog(room, sender, msg)
