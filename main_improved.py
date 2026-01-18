@@ -134,7 +134,11 @@ API_TIMEOUTS = {
     
     # AI 대화 - 비활성화 상태
     '?': 8.0,                   # AI 대화 (현재 비활성화)
-    
+
+    # URL 자동 요약 - 긴 타임아웃 (웹 스크래핑 + OpenAI API 2회 호출)
+    'http://': 20.0,            # HTTP URL 요약
+    'https://': 20.0,           # HTTPS URL 요약
+
     # 기본값
     'default': 4.0              # 기본 타임아웃
 }
@@ -152,8 +156,12 @@ def get_command_cache_timeout(msg: str) -> int:
 
 def get_command_api_timeout(msg: str) -> float:
     """명령어별 API 타임아웃 결정"""
+    # URL 자동 요약은 명시적으로 긴 타임아웃 적용
+    if msg.startswith('http://') or msg.startswith('https://'):
+        return 20.0
+
     for cmd, timeout in API_TIMEOUTS.items():
-        if msg.startswith(cmd):
+        if cmd != 'default' and msg.startswith(cmd):
             return timeout
     return API_TIMEOUTS.get('default', 4.0)
 
@@ -297,6 +305,9 @@ async def get_reply_with_timeout(room: str, sender: str, msg: str, timeout: floa
     # 명령어별 타임아웃 결정 (함수 사용)
     if timeout is None:
         timeout = get_command_api_timeout(msg)
+        # URL 요약 디버깅 로그
+        if msg.startswith('http://') or msg.startswith('https://'):
+            logger.info(f"🔗 URL 요약 요청 감지 - 타임아웃: {timeout}초")
         logger.debug(f"명령어 '{msg[:20]}' 타임아웃: {timeout}초")
     
     # 1. 캐시 확인 (중복 요청 방지)
@@ -471,9 +482,9 @@ async def handle_message(request: Request):
             json_str = json.dumps(response_data, ensure_ascii=True)
             return Response(content=json_str, media_type="application/json; charset=utf-8")
         
-        # 3. 타임아웃이 있는 응답 생성 (AI 기능 비활성화)
-        # AI 기능 비활성화 - 모든 메시지는 일반 명령어 타임아웃 사용
-        reply_msg = await get_reply_with_timeout(room, sender, msg, timeout=4.0)  # 일반 명령어는 4초
+        # 3. 타임아웃이 있는 응답 생성 (명령어별 동적 타임아웃)
+        # URL 자동 요약 등 명령어별 타임아웃 자동 결정
+        reply_msg = await get_reply_with_timeout(room, sender, msg)  # 타임아웃 자동 결정
         
         # 4. 응답 정리 및 전송
         if reply_msg:

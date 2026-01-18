@@ -1110,12 +1110,9 @@ def extract_main_content(soup):
 
 
 def web_summary(room: str, sender: str, msg: str):
-    """웹페이지 3줄 요약 - requests 우선, ScrapingBee fallback"""
+    """웹페이지 3줄 요약 - requests 우선, Bright Data 프록시 fallback"""
     url = msg.strip()
-    
-    # ScrapingBee API 키 로테이션
-    current_api_key = get_next_scrapingbee_key()
-    
+
     content = None
     title = None
     
@@ -1182,34 +1179,49 @@ def web_summary(room: str, sender: str, msg: str):
     except Exception as e:
         log(f"웹페이지 로드 실패: {e}, fallback 시도")
     
-    # 2. requests 실패 시 ScrapingBee API 사용
-    if not content:  # ScrapingBee API 활성화 (2개 키 사용 가능)
+    # 2. requests 실패 시 Bright Data 프록시 사용
+    if not content:
         try:
-            log(f"ScrapingBee API 사용 시작")
-            
-            # ScrapingBee API 엔드포인트
-            scrapingbee_url = 'https://app.scrapingbee.com/api/v1/'
-            
-            # ScrapingBee 파라미터
-            params = {
-                'api_key': current_api_key,
-                'url': url,
-                'render_js': 'true',  # JavaScript 렌더링 활성화 (네이버 블로그 등)
-                'premium_proxy': 'true',  # 프리미엄 프록시 사용
-                'country_code': 'kr',  # 한국 IP 사용
-                'wait': '3000',  # 3초 대기 (동적 콘텐츠 로딩)
-                'block_resources': 'false'  # 모든 리소스 로드
+            log(f"Bright Data 프록시 사용 시작")
+
+            # Bright Data 프록시 설정
+            proxy_host = os.getenv('BRIGHT_DATA_HOSTNAME', 'brd.superproxy.io')
+            proxy_port = os.getenv('BRIGHT_DATA_PORT', '33335')
+            proxy_user = os.getenv('BRIGHT_DATA_USERNAME')
+            proxy_pass = os.getenv('BRIGHT_DATA_PASSWORD')
+
+            proxies = {
+                'http': f'http://{proxy_user}:{proxy_pass}@{proxy_host}:{proxy_port}',
+                'https': f'http://{proxy_user}:{proxy_pass}@{proxy_host}:{proxy_port}'
             }
-            
-            response = requests.get(scrapingbee_url, params=params, timeout=25)
-            
+
+            proxy_headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8',
+            }
+
+            # 네이버의 경우 모바일 User-Agent 사용
+            if 'naver.com' in url:
+                proxy_headers['User-Agent'] = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
+
+            # SSL 경고 비활성화 (프록시 사용 시 필요)
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+            response = requests.get(url, proxies=proxies, headers=proxy_headers, timeout=25, verify=False)
+
             if response.status_code == 200:
+                # 인코딩 처리
+                if response.encoding == 'ISO-8859-1':
+                    response.encoding = response.apparent_encoding or 'utf-8'
+
                 soup = bs(response.text, 'html.parser')
-                
+
                 # 제목 추출
                 if not title:
                     title = soup.find('title').text.strip() if soup.find('title') else "제목 없음"
-                
+
                 # 네이버 블로그 특별 처리
                 if 'blog.naver.com' in url:
                     # iframe 체크
@@ -1220,21 +1232,17 @@ def web_summary(room: str, sender: str, msg: str):
                             # iframe URL이 상대 경로일 수 있음
                             if not iframe_src.startswith('http'):
                                 iframe_src = 'https://blog.naver.com' + iframe_src
-                            
+
                             log(f"네이버 블로그 iframe 감지, iframe URL로 재시도: {iframe_src}")
-                            
-                            # iframe URL로 다시 ScrapingBee 요청
-                            iframe_params = params.copy()
-                            iframe_params['url'] = iframe_src
-                            
+
                             try:
-                                iframe_response = requests.get(scrapingbee_url, params=iframe_params, timeout=25)
+                                iframe_response = requests.get(iframe_src, proxies=proxies, headers=proxy_headers, timeout=25, verify=False)
                                 if iframe_response.status_code == 200:
                                     soup = bs(iframe_response.text, 'html.parser')
                                     log("iframe 콘텐츠 로드 성공")
                             except Exception as e:
                                 log(f"iframe 로드 실패: {e}")
-                    
+
                     # 네이버 블로그의 메인 콘텐츠 영역
                     content_selectors = [
                         '.se-main-container',  # 스마트에디터3
@@ -1243,7 +1251,7 @@ def web_summary(room: str, sender: str, msg: str):
                         '.post-view',
                         'div[id^="post-view"]'
                     ]
-                    
+
                     for selector in content_selectors:
                         element = soup.select_one(selector)
                         if element:
@@ -1253,28 +1261,26 @@ def web_summary(room: str, sender: str, msg: str):
                             content = element.get_text(strip=True)
                             if len(content) > 100:
                                 break
-                
+
                 # 일반 웹페이지 처리
                 if not content or len(content) < 100:
                     content = extract_main_content(soup)
-                    
-                log(f"ScrapingBee로 콘텐츠 추출 성공: {len(content) if content else 0}자")
-                
+
+                log(f"Bright Data로 콘텐츠 추출 성공: {len(content) if content else 0}자")
+
             else:
-                log(f"ScrapingBee API 오류: {response.status_code}")
-                
+                log(f"Bright Data 프록시 오류: {response.status_code}")
+
         except Exception as e:
-            log(f"ScrapingBee 실패: {e}")
+            log(f"Bright Data 실패: {e}")
     
     # 콘텐츠가 여전히 없으면 에러 반환
     if not content or len(content) < 100:
         return f"⚠️ 페이지 내용을 추출할 수 없습니다.\n{url}"
     
-    # Gemini로 요약
-    api_key = APIManager.get_next_gemini_key()  # APIManager에서 관리
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    
+    # OpenAI로 요약
+    openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+
     # 3줄 요약 (개선된 프롬프트)
     prompt_3lines = f"""다음 웹페이지 내용을 3개의 핵심 포인트로 극히 간결하게 정리해주세요. 각 포인트는 핵심 내용과 그에 대한 객관적인 의미/주요 영향을 포함하여, **각각 최대 1~2줄로 명료하게 요약해주세요.** 다양한 연결어와 어휘를 사용하고, **특히 '이는' 이라는 표현은 절대로 사용하지 말고,** 대신 '이것은', '이 점은', '해당 내용은'과 같이 다른 표현을 사용하거나 문맥에 맞게 자연스럽게 연결해주세요. 불필요한 세부 설명은 모두 생략하고, 전체 요약은 매우 짧아야 합니다. 다른 설명 없이 아래 번호 형식만 사용하세요:
 
@@ -1287,9 +1293,14 @@ def web_summary(room: str, sender: str, msg: str):
 제목: {title}
 내용: {content[:5000]}
 """
-    
+
     try:
-        summary_3lines = model.generate_content(prompt_3lines).text
+        response_3lines = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt_3lines}],
+            max_tokens=500
+        )
+        summary_3lines = response_3lines.choices[0].message.content
         # 줄바꿈이 없으면 추가
         if '\n' not in summary_3lines:
             sentences = summary_3lines.split('. ')
@@ -1298,7 +1309,7 @@ def web_summary(room: str, sender: str, msg: str):
     except Exception as e:
         log(f"3줄 요약 실패: {e}")
         summary_3lines = "요약을 생성할 수 없습니다."
-    
+
     # 전체 상세 요약
     prompt_full = f"""다음 웹페이지 내용을 10줄 이내로 상세히 요약해줘.
 핵심 내용을 빠짐없이, 읽기 쉽게 정리해줘.
@@ -1307,9 +1318,14 @@ def web_summary(room: str, sender: str, msg: str):
 제목: {title}
 내용: {content[:10000]}
 """
-    
+
     try:
-        full_summary = model.generate_content(prompt_full).text
+        response_full = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt_full}],
+            max_tokens=1000
+        )
+        full_summary = response_full.choices[0].message.content
     except Exception as e:
         log(f"전체 요약 실패: {e}")
         full_summary = summary_3lines  # 실패시 3줄 요약 재사용
