@@ -74,8 +74,8 @@ def _scrape_naver_section(section_url: str, display_name: str, emoji: str, use_m
             # 헤드라인 뉴스 먼저 선택
             news_items = result.select('li.sa_item._SECTION_HEADLINE')
 
-            # 헤드라인이 10개 미만이면 일반 뉴스에서 추가
-            if len(news_items) < 10:
+            # 헤드라인이 8개 미만이면 일반 뉴스에서 추가
+            if len(news_items) < 8:
                 all_items = result.select('li.sa_item')
                 # 헤드라인에 없는 일반 뉴스 추가
                 headline_links = set()
@@ -85,7 +85,7 @@ def _scrape_naver_section(section_url: str, display_name: str, emoji: str, use_m
                         headline_links.add(link_elem.get('href', ''))
 
                 for item in all_items:
-                    if len(news_items) >= 15:  # 충분히 확보
+                    if len(news_items) >= 12:  # 충분히 확보
                         break
                     link_elem = item.select_one('a[href*="article"]')
                     if link_elem and link_elem.get('href', '') not in headline_links:
@@ -95,10 +95,10 @@ def _scrape_naver_section(section_url: str, display_name: str, emoji: str, use_m
             if not news_items:
                 return f"{emoji} {display_name} 뉴스를 불러올 수 없습니다."
 
-            # 상위 10개 (광고 제외)
+            # 상위 8개 (광고 제외)
             count = 0
             for item in news_items:
-                if count >= 10:
+                if count >= 8:
                     break
 
                 # li 요소인 경우
@@ -172,10 +172,10 @@ def _scrape_naver_section(section_url: str, display_name: str, emoji: str, use_m
             all_ranking = result.select('.rankingnews li')
             news_items = all_ranking
 
-        # 상위 10개 (광고 제외)
+        # 상위 8개 (광고 제외)
         count = 0
         for item in news_items:
-            if count >= 10:
+            if count >= 8:
                 break
 
             # article 링크가 있는 a 태그 찾기
@@ -271,13 +271,13 @@ def realestate_news(room: str, sender: str, msg: str):
         if not news_items:
             return f"🏠 부동산 뉴스를 불러올 수 없습니다."
 
-        # 상위 10개 기사 추출
+        # 상위 8개 기사 추출
         count = 0
         seen = set()
         ad_keywords_lower = [k.lower() for k in AD_KEYWORDS]
 
         for item in news_items:
-            if count >= 10:
+            if count >= 8:
                 break
 
             # 제목과 링크 추출
@@ -410,7 +410,7 @@ def _category_news(category_name: str, display_name: str, search_keywords: str):
 
         send_msg = f"{emoji} {display_name} 뉴스 📺\n📅 {get_kst_time()} 기준"
 
-        for item in items[:10]:
+        for item in items[:8]:
             title = item.get('title', '')
             link = item.get('originallink') or item.get('link', '')
             source = item.get('source', '')
@@ -479,7 +479,7 @@ def _fallback_category_news(category_name: str, display_name: str):
         if not news_items:
             return f"{emoji} {display_name} 뉴스를 불러올 수 없습니다."
 
-        for item in news_items[:10]:
+        for item in news_items[:8]:
             title_elem = item.select_one('.sa_text_strong')
             link_elem = item.select_one('.sa_text_title')
 
