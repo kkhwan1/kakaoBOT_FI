@@ -24,9 +24,9 @@ class DebugLogger:
                 try:
                     with open(self.log_file, 'a', encoding='utf-8') as f:
                         f.write(log_message + '\n')
-                except:
+                except Exception:
                     pass
-    
+
     def log_error(self, message):
         """에러 메시지 로깅"""
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -37,9 +37,25 @@ class DebugLogger:
             try:
                 with open(self.log_file, 'a', encoding='utf-8') as f:
                     f.write(log_message + '\n')
-            except:
+            except Exception:
                 pass
-    
+
+    def error(self, message):
+        """에러 로깅 (log_error 별칭)"""
+        self.log_error(message)
+
+    def info(self, message):
+        """정보 로깅 (log_debug 별칭)"""
+        self.log_debug(message)
+
+    def debug(self, message):
+        """디버그 로깅 (log_debug 별칭)"""
+        self.log_debug(message)
+
+    def warn(self, message):
+        """경고 로깅 (log_error 별칭)"""
+        self.log_error(f"WARN: {message}")
+
     def set_enabled(self, enabled):
         """로깅 활성화/비활성화"""
         self.enabled = enabled

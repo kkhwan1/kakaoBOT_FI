@@ -60,22 +60,19 @@ def db_connection():
             conn.close()
 
 
-def execute_query(query: str, params: Tuple = None, commit: bool = True) -> int:
+def execute_query(query: str, params: Tuple = None) -> int:
     """
     쿼리 실행 (INSERT, UPDATE, DELETE)
-    
+
     Args:
         query: SQL 쿼리
         params: 쿼리 파라미터
-        commit: 자동 커밋 여부
-    
+
     Returns:
         int: 영향받은 행 수
     """
     with db_connection() as (conn, cursor):
         cursor.execute(query, params)
-        if commit:
-            conn.commit()
         return cursor.rowcount
 
 
@@ -108,8 +105,8 @@ def fetch_all(query: str, params: Tuple = None, limit: int = None) -> List[Dict]
         List[Dict]: 조회 결과 리스트
     """
     with db_connection() as (conn, cursor):
-        if limit:
-            query += f" LIMIT {limit}"
+        if limit is not None:
+            query += f" LIMIT {int(limit)}"
         cursor.execute(query, params)
         return cursor.fetchall()
 

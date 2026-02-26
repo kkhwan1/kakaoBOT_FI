@@ -36,6 +36,10 @@ except ImportError:
             print(f"Request error: {e}")
             return None
 
+    def gemini15_flash(system, question, retry_count=0, use_search=True):
+        """Gemini 폴백 - fn.py 사용 불가시"""
+        return None
+
 
 def youtube_popular_all(room: str, sender: str, msg: str):
     """유튜브 인기 급상승 동영상 전체"""
@@ -104,31 +108,6 @@ def youtube_popular_random(room: str, sender: str, msg: str):
     except Exception as e:
         debug_logger.error(f"YouTube 랜덤 동영상 오류: {str(e)}")
         return "YouTube 인기 동영상을 불러오는 중 오류가 발생했습니다."
-
-
-def movie_rank(room: str, sender: str, msg: str):
-    """영화 순위 - 여러 방법 시도"""
-    from movie_modules.movie_rank_direct import get_movie_ranking_direct
-    from movie_modules.movie_rank_selenium import get_movie_ranking_selenium
-    from movie_modules.movie_rank_playwright import get_movie_ranking_playwright
-    
-    # 1. 직접 API 시도
-    ranking = get_movie_ranking_direct()
-    if ranking:
-        return ranking
-    
-    # 2. Selenium 시도
-    ranking = get_movie_ranking_selenium()
-    if ranking:
-        return ranking
-    
-    # 3. Playwright 시도
-    ranking = get_movie_ranking_playwright()
-    if ranking:
-        return ranking
-    
-    # 모든 방법 실패
-    return "🎬 영화 순위를 불러올 수 없습니다.\n잠시 후 다시 시도해주세요."
 
 
 def summarize(room: str, sender: str, msg: str):

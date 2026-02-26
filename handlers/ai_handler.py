@@ -128,7 +128,6 @@ def gemini15_flash(system, question, retry_count=0, use_search=True):
         # 응답이 없으면 재시도
         if retry_count < 2:
             print(f"Gemini 재시도 {retry_count + 1}/2")
-            APIManager.rotate_gemini_key()  # 다음 키로 회전
             return gemini15_flash(system, question, retry_count + 1, use_search)
         
         return None
@@ -141,7 +140,6 @@ def gemini15_flash(system, question, retry_count=0, use_search=True):
         if "API_KEY_INVALID" in error_msg or "invalid API key" in error_msg:
             if retry_count < 3:
                 print(f"Gemini API 키 오류, 다음 키로 재시도 {retry_count + 1}/3")
-                APIManager.rotate_gemini_key()  # 다음 키로 강제 회전
                 return gemini15_flash(system, question, retry_count + 1, use_search)
         
         # quota 에러시 검색 없이 재시도
@@ -151,7 +149,6 @@ def gemini15_flash(system, question, retry_count=0, use_search=True):
         
         # 다른 키로 재시도
         if retry_count < 2:
-            APIManager.rotate_gemini_key()
             return gemini15_flash(system, question, retry_count + 1, use_search)
         
         return None

@@ -4,135 +4,150 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-STORIUM Bot - A KakaoTalk integrated bot system that connects via 메신저봇R (Messenger Bot R) to provide 31+ commands across AI chat, real-time information, search, finance, entertainment, and utilities.
+STORIUM Bot - KakaoTalk chatbot via 메신저봇R (Android JS app) providing 31+ commands: AI chat, finance, news, entertainment, utilities.
 
-**Architecture:** Modular monolith transitioning to service-oriented architecture. The core message flow is: KakaoTalk → 메신저봇R → FastAPI Server → Command Processing → Response.
+**Message Flow**: KakaoTalk → 메신저봇R (`메신저r.js`) → FastAPI `POST /api/kakaotalk` → `core/router.py:get_reply_msg()` → handlers → response
 
-## Running the Server
+**Scheduled Messages**: `메신저r.js` polls `POST /api/poll` every 60s → `services/schedule_service.py` returns pending messages via APScheduler
+
+## Common Commands
 
 ```bash
-# Development
+# Run server (port 8002)
 python main_improved.py
 
-# With Docker
-docker build -t kakao-bot .
-docker run -p 8080:8080 kakao-bot
-
-# External access (for 메신저봇R connection)
-ngrok http 8000
-```
-
-## Dependencies
-
-```bash
+# Install dependencies
 pip install -r requirements.txt
-playwright install chromium  # For movie rankings
+
+# Install Playwright for movie rankings
+playwright install chromium
+
+# Test endpoint
+curl -X POST http://localhost:8002/api/kakaotalk -H "Content-Type: application/json" -d '{"room":"test","sender":"test","msg":"/테스트"}'
+
+# Run tests (no server needed, uses mocks)
+python test_services.py     # Service layer tests
+python test_structure.py    # Module import tests
+python test_commands.py     # End-to-end command tests
+
+# External access (for 메신저봇R)
+ngrok http 8002
+
+# Docker (uses port 8080, not 8002)
+docker build -t kakao-bot . && docker run -p 8080:8080 kakao-bot
+
+# Production (Digital Ocean - systemd)
+sudo systemctl restart kakaobot
+journalctl -u kakaobot -f
 ```
 
-## Code Architecture
+## Architecture
 
-### Current Structure (Migration in Progress)
+### fn.py Migration Pattern (CRITICAL)
 
-The project is migrating from a monolithic `fn.py` (4,200+ lines) to a modular structure:
+The project is migrating from monolithic `fn.py` (~4,200 lines) to modular `handlers/`. **DO NOT DELETE `fn.py`** - it's still the source of truth for many functions including `web_summary`, `fortune`, `zodiac`.
 
-```
-kakaoBot-main/
-├── main_improved.py       # FastAPI server (entry point)
-├── config.py              # Central configuration management
-├── command_manager.py     # Command registry & metadata
-├── fn.py                  # Legacy command processing (DO NOT DELETE - being phased out)
-│
-├── core/                  # Core routing & messaging
-│   ├── router.py          # Message routing - delegates to handlers
-│   └── message_handler.py
-│
-├── handlers/              # Feature-specific handlers (7 modules)
-│   ├── ai_handler.py      # AI conversation (GPT/Claude/Gemini)
-│   ├── news_handler.py    # News search & aggregation
-│   ├── stock_handler.py   # Stock/finance data
-│   ├── media_handler.py   # YouTube, movies, entertainment
-│   ├── game_handler.py    # Games (LOL lottery, etc.)
-│   ├── utility_handler.py # Weather, maps, calories, etc.
-│   └── admin_handler.py   # Admin-only commands
-│
-├── services/              # Business logic layer
-│   ├── ai_service.py      # AI API integration
-│   ├── http_service.py    # HTTP request management
-│   ├── db_service.py      # Database operations
-│   └── web_scraping_service.py
-│
-├── utils/                 # Shared utilities
-│   ├── api_manager.py
-│   └── debug_logger.py
-│
-└── movie_modules/         # Movie ranking scrapers (Playwright/Selenium/Direct)
+**Override mechanism in `handlers/__init__.py`**:
+```python
+from fn import *              # 1st: Legacy functions (base layer)
+from .ai_handler import *     # 2nd: Migrated handlers override fn.py
+from .news_handler import *   # ...more overrides
 ```
 
-### Key Files - Do Not Modify Without Understanding
+Python's star-import uses last-wins semantics. When migrating a function:
+1. Create handler in `handlers/{category}_handler.py`
+2. Import in `handlers/__init__.py` **AFTER** `from fn import *` so it overrides
+3. The old fn.py version becomes dead code but keep it as fallback
 
-| File | Purpose | Lines |
-|------|---------|-------|
-| `fn.py` | Legacy command processing - being migrated to handlers | ~4,200 |
-| `main_improved.py` | FastAPI server with timeout & caching | ~920 |
-| `command_manager.py` | Command registry, permissions, metadata | ~614 |
-| `config.py` | Central configuration, API keys, room access | ~185 |
-| `core/router.py` | Message routing to appropriate handlers | ~270 |
+### Routing Logic (`core/router.py`)
 
-### Message Flow
+`get_reply_msg(room, sender, msg)` uses lazy imports and cascading if/elif:
 
-1. **Request**: KakaoTalk → 메신저봇R → POST `/api/kakaotalk`
-2. **Routing**: `core/router.py:get_reply_msg()` parses command
-3. **Handler**: Delegates to appropriate handler function
-4. **Service**: Handler calls service layer for business logic
-5. **Response**: Formatted and cached response sent back
+| Pattern | Handler | Notes |
+|---------|---------|-------|
+| `?질문` | `get_ai_answer()` | AI chat - strips `?` prefix, uses Gemini |
+| `#검색어` | `naver_keyword()` | Naver keyword analysis |
+| `/command` | Various handlers | Standard slash commands |
+| URL in message | YouTube → `summarize()`, other → `web_summary()` | Auto-detection via regex |
+| Greeting words | Auto-response | 안녕, 하이, 헬로, etc. |
+| `han.gl` | Spam filter | Returns spam warning |
 
-## Adding Commands
+Admin-only commands (스케줄, 방관리, 오류모니터링) are gated by `config.is_admin_user(sender)`.
 
-1. **Register** in `command_manager.py` → `ALL_COMMANDS` list
-2. **Implement** in appropriate handler (`handlers/*.py`)
-3. **Route** in `core/router.py` → add elif clause
-4. **Test** via `/테스트` or actual 카카오톡 message
+### Request Processing Pipeline (`main_improved.py`)
+
+1. `POST /api/kakaotalk` receives `{room, sender, msg}`
+2. Room whitelist check via `config.is_room_enabled(room)`
+3. `get_reply_with_timeout()` applies per-command timeouts from `API_TIMEOUTS` dict
+4. Result cached in `response_cache` with per-command TTL from `CACHE_TIMEOUTS` dict
+5. `clean_message_for_kakao()` truncates to 1000 chars and replaces problematic emoji
+6. Response as JSON with `ensure_ascii=True`
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `fn.py` | Legacy monolith - DO NOT DELETE |
+| `main_improved.py` | FastAPI server, caching, timeouts, message cleaning |
+| `core/router.py` | Message routing - `get_reply_msg()` |
+| `command_manager.py` | Command registry (`ALL_COMMANDS` list), permissions, help text |
+| `config.py` | Room whitelist, admin users, API keys (from `.env`) |
+| `error_monitor.py` | Error tracking, auto-disables commands at >50% failure rate |
+| `메신저r.js` | Android 메신저봇R script - client-side |
+
+### Module Layout
+
+- **`handlers/`**: ai, news, stock, media, game, utility, admin, schedule handlers
+- **`services/`**: ai_service, http_service, db_service, web_scraping_service, schedule_service
+- **`utils/`**: api_manager (API key rotation), debug_logger, text_utils
+- **`movie_modules/`**: Movie ranking scrapers (playwright, selenium, HTTP fallbacks)
+- **`data/`**: SQLite databases (`schedules.db`)
+
+## Adding a New Command
+
+1. **Register** in `command_manager.py` → `ALL_COMMANDS` list:
+   ```python
+   {"name": "/명령어", "description": "설명", "category": "카테고리",
+    "handler": "function_name", "is_prefix": True, "admin_only": False}
+   ```
+2. **Implement** in `handlers/{category}_handler.py` — signature: `def handler(room, sender, msg)`
+3. **Route** in `core/router.py` → add `elif` clause in `get_reply_msg()`
+4. **Export** from `handlers/__init__.py` if new module
+
+All handler functions take `(room: str, sender: str, msg: str)` and return `str` or `None`.
 
 ## Configuration
 
-- **Room Access Control**: `config.py` → `BOT_CONFIG["ALLOWED_ROOMS"]`
-- **Admin Users**: `config.py` → `ADMIN_USERS`
-- **API Keys**: Stored in `.env` (not committed), loaded via `python-dotenv`
-- **ngrok URL**: Auto-detected from localhost:4040 API
+Copy `.env.example` to `.env` with API keys:
+- **AI**: `GEMINI_API_KEY_{1-4}`, `CLAUDE_API_KEY`, `OPENAI_API_KEY`, `PERPLEXITY_API_KEY_{1-2}`
+- **Data**: `YOUTUBE_API_KEY`, `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`
+- **Scraping**: `BRIGHT_DATA` proxy credentials
 
-## Response Cache Timeouts (defined in main_improved.py)
+API key rotation uses numbered env vars (e.g., `GEMINI_API_KEY_1`, `_2`, `_3`, `_4`) via `utils/api_manager.py`.
 
-- **24h**: `/영화순위`, `/로또결과`
-- **5min**: `/환율`, `/금값`
-- **3min**: `/코인`
-- **1min**: `/주식`
-- **No cache**: `?` (AI chat)
+Room whitelist and admin users are in `config.py` → `BOT_CONFIG`.
 
-## Critical Timeouts
+## Critical Constraints
 
-- **Commands**: 4 seconds
-- **AI Chat**: 8 seconds (currently disabled)
-- **Message limit**: 1000 characters
+| Constraint | Value | Why |
+|-----------|-------|-----|
+| Message length | 1000 chars | KakaoTalk limit, enforced in `clean_message_for_kakao()` |
+| Default timeout | 4s | `API_TIMEOUTS['default']` in `main_improved.py` |
+| URL summary timeout | 15s | Web scraping + LLM summarization |
+| Cache size | 100 entries (LRU) | `MAX_CACHE_SIZE` in `main_improved.py` |
+| Thread pool | 3 workers | `executor` in `main_improved.py` |
+| Schedules per room | 20 | `MAX_SCHEDULES_PER_ROOM` in `schedule_service.py` |
 
-## Migration Status (Phases 1-3 Complete, Phase 4 In Progress)
+Per-command timeouts and cache TTLs are defined in `API_TIMEOUTS` and `CACHE_TIMEOUTS` dicts in `main_improved.py`.
 
-- ✅ Phase 1: Handler separation (`handlers/` directory)
-- ✅ Phase 2: Service layer implementation (`services/` directory)
-- ✅ Phase 3: Core module improvements (`core/` directory)
-- 🔄 Phase 4: Progressive migration from `fn.py`
+## Schedule System
 
-See `MIGRATION_PLAN.md` for details.
+`services/schedule_service.py` — APScheduler-based cron scheduling:
+- Patterns: `매일`, `평일`, `주말`, `매주월`, `매월X일`
+- Time: `HH:MM` or `오전/오후 X시 Y분`
+- Storage: SQLite `data/schedules.db` + JSON `data/schedules.json`
+- Delivery: `/api/poll` endpoint returns pending messages for 메신저봇R to send
 
-## Testing
+## Error Monitoring
 
-```bash
-python test_services.py   # Service layer tests
-python test_structure.py  # Module import tests
-```
-
-## Deployment
-
-- **Dockerfile** uses `python:3.11-slim`
-- **DigitalOcean App Platform** configured for auto-deploy
-- **Port**: 8002 (configurable)
-- **Endpoint**: `/api/kakaotalk`
+`error_monitor.py` tracks per-command failures. Commands exceeding 50% error rate are auto-disabled. Admin commands `/오류로그`, `/오류통계`, `/명령어활성화` for diagnostics.

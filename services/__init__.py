@@ -35,6 +35,12 @@ try:
 except ImportError as e:
     print(f"Web scraping service import error: {e}")
 
+# 스케줄 서비스
+try:
+    from .schedule_service import ScheduleService, schedule_service
+except ImportError as e:
+    print(f"Schedule service import error: {e}")
+
 # 임시: fn.py에서 서비스 관련 함수들 노출 (점진적 마이그레이션)
 try:
     from fn import (
@@ -68,5 +74,9 @@ __all__ = [
     
     # Web Scraping
     'WebScrapingService',
-    'web_scraping_service'
+    'web_scraping_service',
+
+    # Schedule
+    'ScheduleService',
+    'schedule_service',
 ]

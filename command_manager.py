@@ -169,14 +169,6 @@ ALL_COMMANDS = [
         "status": "✅ 정상작동"
     },
     {
-        "name": "/영화순위",
-        "description": "어제의 영화 순위",
-        "category": "엔터",
-        "emoji": "🍿",
-        "handler": "movie_rank",
-        "status": "✅ 정상작동"
-    },
-    {
         "name": "/인급동",
         "description": "유튜브 인기동영상",
         "category": "엔터",
@@ -218,18 +210,39 @@ ALL_COMMANDS = [
         "status": "✅ 정상작동"
     },
     
-    # === 게임 ===
+    # === 스케줄 ===
     {
-        "name": "/전적",
-        "description": "LOL 전적 조회",
-        "usage": "/전적 Hide on bush",
-        "category": "게임",
-        "emoji": "🎮",
-        "handler": "lol_record",
+        "name": "/스케줄",
+        "description": "스케줄 등록",
+        "usage": "/스케줄 매일 09:00 /뉴스 → 이국환",
+        "category": "스케줄",
+        "emoji": "⏰",
+        "handler": "schedule_add",
         "is_prefix": True,
+        "admin_only": True,
         "status": "✅ 정상작동"
     },
-    
+    {
+        "name": "/스케줄목록",
+        "description": "등록된 스케줄 조회",
+        "category": "스케줄",
+        "emoji": "📋",
+        "handler": "schedule_list",
+        "admin_only": True,
+        "status": "✅ 정상작동"
+    },
+    {
+        "name": "/스케줄삭제",
+        "description": "스케줄 삭제",
+        "usage": "/스케줄삭제 sch_xxx",
+        "category": "스케줄",
+        "emoji": "🗑️",
+        "handler": "schedule_delete",
+        "is_prefix": True,
+        "admin_only": True,
+        "status": "✅ 정상작동"
+    },
+
     # === 관리자 ===
     {
         "name": "/방추가",
@@ -479,8 +492,8 @@ class CommandManager:
             categories[cmd.category].append(cmd)
         
         # 카테고리 순서 (관리자는 관리 카테고리도 표시)
-        order = ["AI", "기본", "검색", "운세", "날씨", "정보", 
-                "엔터", "유틸", "게임", "특수"]
+        order = ["AI", "기본", "검색", "운세", "날씨", "정보",
+                "엔터", "유틸", "게임", "특수", "스케줄"]
         if is_admin:
             order.append("관리")
         
@@ -536,7 +549,6 @@ class CommandManager:
         # 엔터테인먼트
         message += "🎰 /로또 : 행운의 로또 번호 생성\n"
         message += "🎰 /로또결과 : 최신 당첨번호 확인\n"
-        message += "🍿 /영화순위 : 박스오피스 순위\n"
         message += "📺 /인급동 : 유튜브 인기 동영상\n"
         
         # 운세
@@ -549,7 +561,6 @@ class CommandManager:
         message += "📝 /블로그 [검색어] : 블로그 검색\n"
         
         # 게임
-        message += "🎮 /전적 [소환사명] : LOL 전적 조회\n"
         
         # 관리자 명령어 (관리자만 볼 수 있음)
         if is_admin:

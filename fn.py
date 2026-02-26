@@ -8,6 +8,7 @@ import urllib.parse  # urllib.parse 추가
 import urllib3
 import random
 import subprocess
+import concurrent.futures  # 병렬 처리 추가
 from socket import socket, AF_INET, SOCK_STREAM
 
 from bs4 import BeautifulSoup as bs
@@ -15,6 +16,34 @@ import requests
 import google.generativeai as genai
 import anthropic
 from openai import OpenAI
+
+# ========================================
+# 세션 재사용을 위한 모듈 레벨 캐시
+# ========================================
+_http_session = None
+_proxy_session = None
+_openai_client = None
+
+def get_http_session():
+    """HTTP 세션 반환 (재사용)"""
+    global _http_session
+    if _http_session is None:
+        _http_session = requests.Session()
+    return _http_session
+
+def get_proxy_session():
+    """프록시 세션 반환 (재사용)"""
+    global _proxy_session
+    if _proxy_session is None:
+        _proxy_session = requests.Session()
+    return _proxy_session
+
+def get_openai_client():
+    """OpenAI 클라이언트 반환 (재사용)"""
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+    return _openai_client
 
 # 디버그 로거 추가
 from utils.debug_logger import debug_logger
@@ -1045,7 +1074,7 @@ def summarize(room: str, sender: str, msg: str):
     
     # 전체보기 구분선
     send_msg += '🔗 전체 내용 보기 (클릭▼)'
-    send_msg += '\u180e' * 500  # 보이지 않는 공백으로 전체보기 트리거
+    send_msg += '\u180e' * 200  # 보이지 않는 공백 (축소)
     
     # 숨겨진 상세 정보
     send_msg += '\n\n━━━━━━━━━━━━━━━\n'
@@ -1081,8 +1110,10 @@ def extract_main_content(soup):
         '.content_area',  # 네이버 뉴스 신버전
         
         # 일반 사이트
+        '#article-view-content-div',  # bloter.net 등 뉴스 CMS
+        '.article-body',  # bloter.net, 일부 뉴스 사이트
         'article',  # 일반적인 article 태그
-        '.article_body',  # 다음 뉴스  
+        '.article_body',  # 다음 뉴스
         '.article_view',  # 일부 뉴스 사이트
         '.news_body',  # 일부 뉴스 사이트
         '.content',  # 일반 콘텐츠
@@ -1109,49 +1140,27 @@ def extract_main_content(soup):
     return ""
 
 
-def web_summary(room: str, sender: str, msg: str):
-    """웹페이지 3줄 요약 - requests 우선, Bright Data 프록시 fallback"""
-    url = msg.strip()
-
-    content = None
-    title = None
-    
-    # 1. 먼저 requests로 시도 (개선된 헤더)
+def _fetch_direct_request(url, headers):
+    """직접 HTTP 요청 (병렬 처리용) - 빠른 응답 최적화"""
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-            'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Cache-Control': 'max-age=0',
-            'Upgrade-Insecure-Requests': '1'
-        }
-        
-        # 네이버의 경우 모바일 User-Agent 사용
-        if 'naver.com' in url:
-            headers['User-Agent'] = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
-        
-        # 세션 사용
-        session = requests.Session()
-        response = session.get(url, timeout=10, headers=headers, allow_redirects=True)
-        
-        # 인코딩 처리
+        session = get_http_session()
+        response = session.get(url, timeout=3, headers=headers, allow_redirects=True)
+
         if response.encoding == 'ISO-8859-1':
             response.encoding = response.apparent_encoding or 'utf-8'
-        
+
         soup = bs(response.text, 'html.parser')
-        
-        # 제목 추출 개선
+
+        # 제목 추출
         title_elem = soup.find('title')
+        title = None
         if title_elem:
             title = title_elem.text.strip()
         else:
             og_title = soup.find('meta', property='og:title')
             if og_title:
                 title = og_title.get('content', '제목 없음')
-            else:
-                title = "제목 없음"
-        
+
         # 네이버 블로그 iframe 처리
         if 'blog.naver.com' in url:
             iframe = soup.find('iframe', {'id': 'mainFrame'})
@@ -1160,128 +1169,241 @@ def web_summary(room: str, sender: str, msg: str):
                 if iframe_src:
                     if not iframe_src.startswith('http'):
                         iframe_src = 'https://blog.naver.com' + iframe_src
-                    
+
                     log(f"네이버 블로그 iframe 감지, 재시도: {iframe_src}")
-                    
+
                     # iframe URL로 다시 요청
-                    iframe_response = session.get(iframe_src, headers=headers, timeout=10)
+                    iframe_response = session.get(iframe_src, headers=headers, timeout=3)
                     if iframe_response.status_code == 200:
                         soup = bs(iframe_response.text, 'html.parser')
                         log("iframe 콘텐츠 로드 성공")
-        
-        # 본문 추출 (헬퍼 함수 사용)
+
+        # 본문 추출
         content = extract_main_content(soup)
-        
+
+        # og:description fallback
         if not content or len(content) < 100:
-            log("콘텐츠가 너무 짧거나 없음, fallback 시도")
-            content = None
-            
+            og_desc = soup.find('meta', property='og:description')
+            if og_desc and og_desc.get('content'):
+                og_content = og_desc.get('content', '').strip()
+                if len(og_content) >= 50:
+                    log(f"og:description fallback 사용: {len(og_content)}자")
+                    content = og_content
+
+        return title, content
     except Exception as e:
-        log(f"웹페이지 로드 실패: {e}, fallback 시도")
-    
-    # 2. requests 실패 시 Bright Data 프록시 사용
-    if not content:
-        try:
-            log(f"Bright Data 프록시 사용 시작")
+        log(f"직접 요청 실패: {e}")
+        return None, None
 
-            # Bright Data 프록시 설정
-            proxy_host = os.getenv('BRIGHT_DATA_HOSTNAME', 'brd.superproxy.io')
-            proxy_port = os.getenv('BRIGHT_DATA_PORT', '33335')
-            proxy_user = os.getenv('BRIGHT_DATA_USERNAME')
-            proxy_pass = os.getenv('BRIGHT_DATA_PASSWORD')
 
-            proxies = {
-                'http': f'http://{proxy_user}:{proxy_pass}@{proxy_host}:{proxy_port}',
-                'https': f'http://{proxy_user}:{proxy_pass}@{proxy_host}:{proxy_port}'
-            }
+def _fetch_proxy_request(url, proxy_headers):
+    """프록시 HTTP 요청 (병렬 처리용)"""
+    try:
+        # Bright Data 프록시 설정
+        proxy_host = os.getenv('BRIGHT_DATA_HOSTNAME', 'brd.superproxy.io')
+        proxy_port = os.getenv('BRIGHT_DATA_PORT', '33335')
+        proxy_user = os.getenv('BRIGHT_DATA_USERNAME')
+        proxy_pass = os.getenv('BRIGHT_DATA_PASSWORD')
 
-            proxy_headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8',
-            }
+        proxies = {
+            'http': f'http://{proxy_user}:{proxy_pass}@{proxy_host}:{proxy_port}',
+            'https': f'http://{proxy_user}:{proxy_pass}@{proxy_host}:{proxy_port}'
+        }
 
-            # 네이버의 경우 모바일 User-Agent 사용
-            if 'naver.com' in url:
-                proxy_headers['User-Agent'] = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
+        # SSL 경고 비활성화
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-            # SSL 경고 비활성화 (프록시 사용 시 필요)
-            import urllib3
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        response = requests.get(url, proxies=proxies, headers=proxy_headers, timeout=5, verify=False)
 
-            response = requests.get(url, proxies=proxies, headers=proxy_headers, timeout=25, verify=False)
+        if response.status_code == 200:
+            if response.encoding == 'ISO-8859-1':
+                response.encoding = response.apparent_encoding or 'utf-8'
 
-            if response.status_code == 200:
-                # 인코딩 처리
-                if response.encoding == 'ISO-8859-1':
-                    response.encoding = response.apparent_encoding or 'utf-8'
+            soup = bs(response.text, 'html.parser')
 
-                soup = bs(response.text, 'html.parser')
-
-                # 제목 추출
-                if not title:
-                    title = soup.find('title').text.strip() if soup.find('title') else "제목 없음"
-
-                # 네이버 블로그 특별 처리
-                if 'blog.naver.com' in url:
-                    # iframe 체크
-                    iframe = soup.find('iframe', {'id': 'mainFrame'})
-                    if iframe and not content:
-                        iframe_src = iframe.get('src')
-                        if iframe_src:
-                            # iframe URL이 상대 경로일 수 있음
-                            if not iframe_src.startswith('http'):
-                                iframe_src = 'https://blog.naver.com' + iframe_src
-
-                            log(f"네이버 블로그 iframe 감지, iframe URL로 재시도: {iframe_src}")
-
-                            try:
-                                iframe_response = requests.get(iframe_src, proxies=proxies, headers=proxy_headers, timeout=25, verify=False)
-                                if iframe_response.status_code == 200:
-                                    soup = bs(iframe_response.text, 'html.parser')
-                                    log("iframe 콘텐츠 로드 성공")
-                            except Exception as e:
-                                log(f"iframe 로드 실패: {e}")
-
-                    # 네이버 블로그의 메인 콘텐츠 영역
-                    content_selectors = [
-                        '.se-main-container',  # 스마트에디터3
-                        '.postViewArea',  # 구 에디터
-                        '#postViewArea',
-                        '.post-view',
-                        'div[id^="post-view"]'
-                    ]
-
-                    for selector in content_selectors:
-                        element = soup.select_one(selector)
-                        if element:
-                            # 불필요한 요소 제거
-                            for tag in element.select('script, style, .post_tag, .post_btn'):
-                                tag.decompose()
-                            content = element.get_text(strip=True)
-                            if len(content) > 100:
-                                break
-
-                # 일반 웹페이지 처리
-                if not content or len(content) < 100:
-                    content = extract_main_content(soup)
-
-                log(f"Bright Data로 콘텐츠 추출 성공: {len(content) if content else 0}자")
-
+            # 제목 추출
+            title_elem = soup.find('title')
+            title = None
+            if title_elem:
+                title = title_elem.text.strip()
             else:
-                log(f"Bright Data 프록시 오류: {response.status_code}")
+                og_title = soup.find('meta', property='og:title')
+                if og_title:
+                    title = og_title.get('content', '제목 없음')
 
+            # 네이버 블로그 특별 처리
+            if 'blog.naver.com' in url:
+                iframe = soup.find('iframe', {'id': 'mainFrame'})
+                if iframe:
+                    iframe_src = iframe.get('src')
+                    if iframe_src:
+                        if not iframe_src.startswith('http'):
+                            iframe_src = 'https://blog.naver.com' + iframe_src
+
+                        try:
+                            iframe_response = requests.get(iframe_src, proxies=proxies, headers=proxy_headers, timeout=3, verify=False)
+                            if iframe_response.status_code == 200:
+                                soup = bs(iframe_response.text, 'html.parser')
+                                log("iframe 콘텐츠 로드 성공")
+                        except:
+                            pass
+
+                # 네이버 블로그의 메인 콘텐츠 영역
+                content_selectors = [
+                    '.se-main-container',  # 스마트에디터3
+                    '.postViewArea',  # 구 에디터
+                    '#postViewArea',
+                    '.post-view',
+                    'div[id^="post-view"]'
+                ]
+
+                content = None
+                for selector in content_selectors:
+                    element = soup.select_one(selector)
+                    if element:
+                        for tag in element.select('script, style, .post_tag, .post_btn'):
+                            tag.decompose()
+                        content = element.get_text(strip=True)
+                        if len(content) > 100:
+                            break
+
+            # 일반 웹페이지 처리
+            if not content or len(content) < 100:
+                content = extract_main_content(soup)
+
+            # og:description fallback
+            if not content or len(content) < 100:
+                og_desc = soup.find('meta', property='og:description')
+                if og_desc and og_desc.get('content'):
+                    og_content = og_desc.get('content', '').strip()
+                    if len(og_content) >= 50:
+                        log(f"og:description fallback 사용: {len(og_content)}자")
+                        content = og_content
+
+            log(f"Bright Data로 콘텐츠 추출 성공: {len(content) if content else 0}자")
+            return title, content
+
+    except Exception as e:
+        log(f"프록시 요청 실패: {e}")
+        return None, None
+
+
+# Playwright 브라우저 캐시 (전역 변수)
+_playwright_page = None
+_playwright_browser = None
+
+def get_playwright_page():
+    """Playwright 페이지 반환 (재사용)"""
+    global _playwright_page, _playwright_browser
+    if _playwright_page is None:
+        try:
+            from playwright.sync_api import sync_playwright
+            pw = sync_playwright().start()
+            _playwright_browser = pw.chromium.launch(headless=True)
+            _playwright_page = _playwright_browser.new_page()
+            log("Playwright 브라우저 초기화됨")
         except Exception as e:
-            log(f"Bright Data 실패: {e}")
-    
-    # 콘텐츠가 여전히 없으면 에러 반환
-    if not content or len(content) < 100:
-        return f"⚠️ 페이지 내용을 추출할 수 없습니다.\n{url}"
-    
-    # OpenAI로 요약
-    openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+            log(f"Playwright 초기화 실패: {e}")
+            return None
+    return _playwright_page
 
-    # 3줄 요약 (개선된 프롬프트)
+
+def _fetch_with_playwright(url):
+    """Playwright로 자바스크립트 렌더링 페이지 크롤링"""
+    try:
+        page = get_playwright_page()
+        if not page:
+            return None, None
+
+        page.goto(url, timeout=15000, wait_until='domcontentloaded')
+
+        # 제목
+        title = page.title()
+
+        # 네이버 뉴스 본문 선택자
+        selectors = [
+            '#newsEndContents',
+            '#articleBodyContents',
+            '.news_end',
+            '.article_body',
+            'article',
+        ]
+
+        content = ""
+        for selector in selectors:
+            try:
+                elem = page.query_selector(selector)
+                if elem:
+                    content = elem.inner_text(timeout=2000)
+                    if len(content) > 100:
+                        break
+            except:
+                continue
+
+        # OG description fallback
+        if not content or len(content) < 50:
+            try:
+                og_desc = page.query_selector('meta[property="og:description"]')
+                if og_desc:
+                    content = og_desc.get_attribute('content') or ''
+            except:
+                pass
+
+        return title, content if len(content) >= 50 else None
+    except Exception as e:
+        log(f"Playwright 크롤링 실패: {e}")
+        return None, None
+
+
+def _fetch_content_parallel(url):
+    """직접 요청과 프록시 요청을 병렬로 시도 - 네이버 뉴스는 Playwright 사용"""
+    # 네이버 뉴스는 Playwright 사용
+    if 'news.naver.com' in url or 'm.news.naver.com' in url:
+        log("네이버 뉴스 감지 - Playwright 사용")
+        return _fetch_with_playwright(url)
+
+    # 직접 요청 헤더
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Cache-Control': 'max-age=0',
+    }
+
+    # 네이버의 경우 모바일 User-Agent 사용
+    if 'naver.com' in url:
+        headers['User-Agent'] = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
+
+    # 프록시 요청 헤더
+    proxy_headers = headers.copy()
+    if 'naver.com' in url:
+        proxy_headers['User-Agent'] = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
+
+    # 병렬 실행
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        future_direct = executor.submit(_fetch_direct_request, url, headers)
+        future_proxy = executor.submit(_fetch_proxy_request, url, proxy_headers)
+
+        # as_completed는 Future 객체의 리스트를 받음 - 첫 성공 시 즉시 반환
+        for future in concurrent.futures.as_completed([future_direct, future_proxy], timeout=5):
+            try:
+                title, content = future.result(timeout=1)  # 이미 완료된 future는 즉시 반환
+                if title and content and len(content) >= 50:
+                    return title, content
+            except Exception as e:
+                log(f"요청 실패: {e}")
+                continue
+
+    return None, None
+
+
+def _generate_summaries_parallel(title, content):
+    """3줄 요약과 상세 요약을 병렬로 생성"""
+    openai_client = get_openai_client()
+
+    # 3줄 요약 프롬프트
     prompt_3lines = f"""다음 웹페이지 내용을 3개의 핵심 포인트로 극히 간결하게 정리해주세요. 각 포인트는 핵심 내용과 그에 대한 객관적인 의미/주요 영향을 포함하여, **각각 최대 1~2줄로 명료하게 요약해주세요.** 다양한 연결어와 어휘를 사용하고, **특히 '이는' 이라는 표현은 절대로 사용하지 말고,** 대신 '이것은', '이 점은', '해당 내용은'과 같이 다른 표현을 사용하거나 문맥에 맞게 자연스럽게 연결해주세요. 불필요한 세부 설명은 모두 생략하고, 전체 요약은 매우 짧아야 합니다. 다른 설명 없이 아래 번호 형식만 사용하세요:
 
 1. [첫 번째 핵심 포인트 (1~2줄)]
@@ -1294,57 +1416,76 @@ def web_summary(room: str, sender: str, msg: str):
 내용: {content[:5000]}
 """
 
-    try:
-        response_3lines = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt_3lines}],
-            max_tokens=500
-        )
-        summary_3lines = response_3lines.choices[0].message.content
-        # 줄바꿈이 없으면 추가
-        if '\n' not in summary_3lines:
-            sentences = summary_3lines.split('. ')
-            if len(sentences) >= 3:
-                summary_3lines = sentences[0] + '.\n' + sentences[1] + '.\n' + '. '.join(sentences[2:])
-    except Exception as e:
-        log(f"3줄 요약 실패: {e}")
-        summary_3lines = "요약을 생성할 수 없습니다."
-
-    # 전체 상세 요약
-    prompt_full = f"""다음 웹페이지 내용을 10줄 이내로 상세히 요약해줘.
-핵심 내용을 빠짐없이, 읽기 쉽게 정리해줘.
-요약만 출력하고 다른 말은 하지 마.
+    # 전체 상세 요약 프롬프트
+    prompt_full = f"""다음 웹페이지 내용을 5줄 이내로 요약해줘.
+핵심 내용만 간결하게 정리해.
+요약만 출력해.
 
 제목: {title}
-내용: {content[:10000]}
+내용: {content[:5000]}
 """
 
     try:
-        response_full = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt_full}],
-            max_tokens=1000
-        )
-        full_summary = response_full.choices[0].message.content
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            future_3lines = executor.submit(
+                openai_client.chat.completions.create,
+                model="gpt-4.1-nano",
+                messages=[{"role": "user", "content": prompt_3lines}],
+                max_tokens=500
+            )
+            future_full = executor.submit(
+                openai_client.chat.completions.create,
+                model="gpt-4.1-nano",
+                messages=[{"role": "user", "content": prompt_full}],
+                max_tokens=400
+            )
+
+            # 병렬로 대기
+            summary_3lines = future_3lines.result().choices[0].message.content
+            full_summary = future_full.result().choices[0].message.content
+
+            # 줄바꿈 없으면 포맷
+            if '\n' not in summary_3lines:
+                sentences = summary_3lines.split('. ')
+                if len(sentences) >= 3:
+                    summary_3lines = sentences[0] + '.\n' + sentences[1] + '.\n' + '. '.join(sentences[2:])
+
+            return summary_3lines, full_summary
+
     except Exception as e:
-        log(f"전체 요약 실패: {e}")
-        full_summary = summary_3lines  # 실패시 3줄 요약 재사용
-    
-    # 메시지 구성 (3줄 요약 + 전체보기)
+        log(f"요약 생성 실패: {e}")
+        return "요약을 생성할 수 없습니다.", summary_3lines if 'summary_3lines' in locals() else "요약을 생성할 수 없습니다."
+
+
+def web_summary(room: str, sender: str, msg: str):
+    """웹페이지 3줄 요약 - 병렬 처리로 속도 최적화 (2-3초 목표)"""
+    url = msg.strip()
+
+    # 병렬로 콘텐츠 추출
+    title, content = _fetch_content_parallel(url)
+
+    # 콘텐츠 추출 실패
+    if not title or not content or len(content) < 50:
+        return f"⚠️ 페이지 내용을 추출할 수 없습니다.\n{url}"
+
+    # 병렬로 요약 생성
+    summary_3lines, full_summary = _generate_summaries_parallel(title, content)
+
+    # 메시지 구성
     send_msg = f'📝 웹페이지 요약\n'
     send_msg += f'📌 {title}\n\n'
     send_msg += f'💡 3줄 요약:\n{summary_3lines}\n\n'
-    
+
     # 전체보기 구분선
     send_msg += '🔗 전체 내용 보기 (클릭▼)'
-    send_msg += '\u180e' * 500  # 보이지 않는 공백으로 전체보기 트리거
-    
+    send_msg += '\u180e' * 200  # 보이지 않는 공백 (축소)
+
     # 숨겨진 상세 정보
     send_msg += '\n\n━━━━━━━━━━━━━━━\n'
     send_msg += '📄 상세 요약\n\n'
     send_msg += f'{full_summary}\n\n'
     send_msg += f'🌐 원본 페이지:\n{url}'
-    
+
     return send_msg
 
 

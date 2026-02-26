@@ -1,12 +1,22 @@
 // ===== 서버 URL 설정 =====
 // ngrok URL로 변경하세요 (예: https://abc123.ngrok-free.app)
 // start_server.ps1 실행 후 표시되는 URL을 여기에 입력
-var SERVER_URL = 'https://seal-app-dk72t.ondigitalocean.app/api/kakaotalk';
+var SERVER_URL = 'http://129.212.236.253:8002/api/kakaotalk';
+var POLL_URL = 'http://129.212.236.253:8002/api/poll';
 // 테스트용 localhost (메신저R이 PC에서 실행 중일 때만 사용)
 // var SERVER_URL = 'http://localhost:8002/api/kakaotalk';
+// var POLL_URL = 'http://localhost:8002/api/poll';
+
+// ===== 스케줄 폴링 설정 =====
+var POLL_INTERVAL = 60000;  // 1분 (밀리초)
+var lastPollTime = 0;
+var isPolling = false;
 
 function response(room, msg, sender, isGroupChat, replier, ImageDB) {
     try {
+        // 스케줄 폴링 실행 (메시지가 올 때마다 1분 간격으로 체크)
+        pollScheduledMessages(replier);
+
         // 1. 기본적인 정보 확인 - 토스트로 표시
         if (msg === "/테스트") {
             replier.reply("✅ 메신저R 연결 성공!\n방이름: " + room + "\n보낸이: " + sender);
@@ -37,7 +47,7 @@ function response(room, msg, sender, isGroupChat, replier, ImageDB) {
             .ignoreHttpErrors(true)
             .header("Content-Type", "application/json; charset=utf-8")
             .requestBody(jsonString)
-            .timeout(5000)  // 5초 타임아웃
+            .timeout(20000)  // 20초 타임아웃 (URL 요약에 시간 소요)
             .method(org.jsoup.Connection.Method.POST)
             .execute();
             
@@ -71,6 +81,67 @@ function response(room, msg, sender, isGroupChat, replier, ImageDB) {
 // 레거시 지원을 위한 함수 (일부 메신저R 버전에서 필요할 수 있음)
 function responseFix(room, msg, sender, isGroupChat, replier, ImageDB) {
     response(room, msg, sender, isGroupChat, replier, ImageDB);
+}
+
+// ===== 스케줄 폴링 기능 =====
+// 서버에서 대기 중인 스케줄 메시지를 가져와서 전송
+function pollScheduledMessages(replier) {
+    if (isPolling) return;  // 중복 실행 방지
+
+    var currentTime = new Date().getTime();
+    if (currentTime - lastPollTime < POLL_INTERVAL) return;  // 1분 간격 체크
+
+    isPolling = true;
+    lastPollTime = currentTime;
+
+    try {
+        var httpResponse = org.jsoup.Jsoup.connect(POLL_URL)
+            .ignoreContentType(true)
+            .ignoreHttpErrors(true)
+            .header("Content-Type", "application/json; charset=utf-8")
+            .timeout(10000)
+            .method(org.jsoup.Connection.Method.POST)
+            .execute();
+
+        var responseText = httpResponse.body();
+        var result = JSON.parse(responseText);
+
+        if (result && result.success && result.messages && result.messages.length > 0) {
+            for (var i = 0; i < result.messages.length; i++) {
+                var msg = result.messages[i];
+                if (msg.room && msg.message) {
+                    // 해당 방으로 메시지 전송
+                    Api.replyRoom(msg.room, msg.message);
+                }
+            }
+        }
+    } catch (error) {
+        // 폴링 오류는 무시 (서버 일시 중단 등)
+    } finally {
+        isPolling = false;
+    }
+}
+
+// 주기적 폴링을 위한 타이머 (메신저R에서 지원하는 경우)
+// 참고: 메신저R 버전에 따라 setInterval이 지원되지 않을 수 있음
+// 그 경우 response 함수 내에서 호출하여 사용
+var pollTimer = null;
+function startPolling() {
+    if (pollTimer) return;
+    try {
+        pollTimer = setInterval(function() {
+            pollScheduledMessages(null);
+        }, POLL_INTERVAL);
+    } catch (e) {
+        // setInterval 미지원 시 response에서 폴링
+    }
+}
+
+function stopPolling() {
+    if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+    }
 }
 
 // =====================================================

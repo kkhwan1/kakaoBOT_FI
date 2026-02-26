@@ -11,6 +11,19 @@ import subprocess
 import config
 from utils.debug_logger import debug_logger
 
+# 필수 서비스 함수들 모듈 레벨 import
+try:
+    from services import web_summary, fortune, zodiac, test
+except ImportError:
+    try:
+        from fn import web_summary, fortune, zodiac, test
+    except ImportError:
+        # 함수들이 없는 경우 더미 함수 정의
+        def web_summary(*args, **kwargs): return "서비스를 사용할 수 없습니다."
+        def fortune(*args, **kwargs): return "서비스를 사용할 수 없습니다."
+        def zodiac(*args, **kwargs): return "서비스를 사용할 수 없습니다."
+        def test(*args, **kwargs): return "서비스를 사용할 수 없습니다."
+
 
 def log(message):
     """로그 출력 함수"""
@@ -35,30 +48,50 @@ def get_reply_msg(room: str, sender: str, msg: str):
     # 빈 메시지 처리
     if not msg:
         return None
-    
+
+    # 모듈 레벨에서 import된 web_summary 함수 참조 확인
+    # (핸들러 import가 실패하더라도 web_summary는 사용 가능해야 함)
+    global web_summary, fortune, zodiac, test
+
     # 핸들러 모듈들 import (지연 로딩)
-    from handlers import (
-        # AI 핸들러
-        get_ai_answer,
-        # 뉴스 핸들러
-        economy_news, it_news, realestate_news, world_news,
-        # 주식/금융 핸들러
-        stock, coin, exchange, gold, stock_upper, stock_lower,
-        # 미디어 핸들러
-        youtube_popular_all, youtube_popular_random, summarize, movie_rank, photo,
-        # 게임 핸들러
-        lotto, lotto_result, lotto_result_create, lol_record, fortune_today,
-        # 유틸리티 핸들러
-        whether, whether_today, calorie, wise_saying, emoji, naver_map,
-        search_blog, naver_keyword, real_keyword, naver_land,
-        # 관리자 핸들러
-        room_add, room_remove, room_list, talk_analyize, my_talk_analyize
-    )
-    
-    from services import (
-        web_summary, fortune, zodiac, test
-    )
-    
+    try:
+        from handlers import (
+            # AI 핸들러
+            get_ai_answer,
+            # 뉴스 핸들러
+            economy_news, it_news, realestate_news, world_news,
+            # 주식/금융 핸들러
+            stock, coin, exchange, gold, stock_upper, stock_lower,
+            # 미디어 핸들러
+            youtube_popular_all, youtube_popular_random, summarize, photo,
+            # 게임 핸들러
+            lotto, lotto_result, lotto_result_create, fortune_today,
+            # 유틸리티 핸들러
+            whether, whether_today, calorie, wise_saying, emoji, naver_map,
+            search_blog, naver_keyword, real_keyword, naver_land,
+            # 관리자 핸들러
+            room_add, room_remove, room_list, talk_analyize, my_talk_analyize,
+            # 스케줄 핸들러
+            schedule_add, schedule_list, schedule_delete
+        )
+    except ImportError as e:
+        # 핸들러 import 실패 시 (프로덕션 서버 환경 문제)
+        print(f"핸들러 import 경고: {e}")
+        # 필수 함수만 직접 import 시도
+        from fn import get_reply_msg as _get_reply_msg_fallback
+        # URL 요약을 위해 services에서 직접 import
+        from services import web_summary
+        # 기본 함수 정의 (핸들러가 없는 경우)
+        def schedule_add(*args, **kwargs): return "스케줄 기능을 사용할 수 없습니다."
+        def schedule_list(*args, **kwargs): return "스케줄 기능을 사용할 수 없습니다."
+        def schedule_delete(*args, **kwargs): return "스케줄 기능을 사용할 수 없습니다."
+        # 기타 함수들은 fn.py에서 가져오기 시도
+        # (import *는 함수 내에서 사용 불가능하여 주요 함수만 직접 import)
+        try:
+            import fn
+        except:
+            pass
+
     # 통합 명령어 관리자 import
     try:
         from command_manager import get_command_help, check_command_permission, get_command_list
@@ -146,8 +179,6 @@ def get_reply_msg(room: str, sender: str, msg: str):
     # 생활 정보
     elif msg.startswith("/칼로리"):
         return calorie(room, sender, msg)
-    elif msg == "/영화순위":
-        return movie_rank(room, sender, msg)
     elif msg.startswith(("/맵", "/지도")):
         return naver_map(room, sender, msg)
     elif msg.startswith("/") and msg.endswith("맛집"):
@@ -165,10 +196,6 @@ def get_reply_msg(room: str, sender: str, msg: str):
     elif msg.startswith("/네이버부동산"):
         return naver_land(room, sender, msg)
     
-    # 게임
-    elif msg.startswith('/전적'):
-        return lol_record(room, sender, msg)
-    
     # 로또
     elif msg.startswith("/로또결과생성"):
         return lotto_result_create(room, sender, msg)
@@ -180,7 +207,7 @@ def get_reply_msg(room: str, sender: str, msg: str):
     # 스팸 감지
     elif "han.gl" in msg:
         return "스팸이 감지되었습니다."
-    
+
     # URL 자동 감지 로직
     # YouTube URL 패턴
     youtube_patterns = [
@@ -189,7 +216,7 @@ def get_reply_msg(room: str, sender: str, msg: str):
         r'(?:https?://)?(?:www\.)?youtube\.com/shorts/[\w-]+',
         r'(?:https?://)?(?:m\.)?youtube\.com/watch\?v=[\w-]+'
     ]
-    
+
     for pattern in youtube_patterns:
         youtube_match = re.search(pattern, msg)
         if youtube_match:
@@ -197,14 +224,14 @@ def get_reply_msg(room: str, sender: str, msg: str):
             if not youtube_url.startswith('http'):
                 youtube_url = 'https://' + youtube_url
             return summarize(room, sender, youtube_url)
-    
+
     # 일반 웹 URL 패턴
     url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
     url_match = re.search(url_pattern, msg)
     if url_match:
         web_url = url_match.group(0)
         return web_summary(room, sender, web_url)
-    
+
     # 관리자 전용 명령어
     if config.is_admin_user(sender):
         # 테스트
@@ -253,6 +280,23 @@ def get_reply_msg(room: str, sender: str, msg: str):
             return clear_cache(room, sender, msg)
         elif msg.startswith('/캐시상태'):
             return cache_status(room, sender, msg)
+
+        # 스케줄 관리 (관리자 전용)
+        elif msg.startswith('/스케줄삭제'):
+            can_use, error_msg = check_command_permission('/스케줄삭제', sender, room)
+            if not can_use:
+                return error_msg
+            return schedule_delete(room, sender, msg)
+        elif msg == '/스케줄목록':
+            can_use, error_msg = check_command_permission('/스케줄목록', sender, room)
+            if not can_use:
+                return error_msg
+            return schedule_list(room, sender, msg)
+        elif msg.startswith('/스케줄'):
+            can_use, error_msg = check_command_permission('/스케줄', sender, room)
+            if not can_use:
+                return error_msg
+            return schedule_add(room, sender, msg)
     
     # 인사 메시지 처리
     greetings = ["안녕", "안녕하세요", "하이", "헬로", "ㅎㅇ", "ㅎ2", "반가워", "반갑습니다"]

@@ -67,3 +67,13 @@ try:
     from .admin_handler import *
 except ImportError:
     pass
+
+# 스케줄 핸들러
+try:
+    from .schedule_handler import (
+        schedule_add,
+        schedule_list,
+        schedule_delete
+    )
+except ImportError as e:
+    print(f"Schedule handler import error: {e}")

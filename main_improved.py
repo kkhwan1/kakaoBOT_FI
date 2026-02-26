@@ -4,7 +4,7 @@
 개선된 메인 서버 - 안정성과 타임아웃 처리 강화
 """
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.responses import Response
 import uvicorn
@@ -15,6 +15,7 @@ import datetime
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 import functools
 import logging
+import re
 
 # 로깅 설정
 logging.basicConfig(
@@ -47,8 +48,20 @@ except ImportError:
     logger.warning("⚠️ core.router를 찾을 수 없음, fn.py에서 import")
     from fn import get_reply_msg
 
+# web_summary 함수 import (URL 요약용)
+try:
+    from fn import web_summary
+    logger.info("✅ web_summary 함수 로드됨")
+except ImportError:
+    logger.warning("⚠️ web_summary 함수를 찾을 수 없음")
+    web_summary = None
+
 # 응답 캐시 (중복 요청 방지)
 response_cache = {}
+
+# 스레드 풀 확장 (URL 요약 전용)
+from concurrent.futures import ThreadPoolExecutor
+url_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="url_summary")
 
 # 캐시 통계 추가
 cache_stats = {
@@ -61,7 +74,6 @@ cache_stats = {
 # 캐시 타임아웃 설정 (초 단위)
 CACHE_TIMEOUTS = {
     # 자주 변하지 않는 데이터 - 장시간 캐시
-    '/영화순위': 86400,      # 24시간 (하루 1회 업데이트)
     '/로또결과': 86400,      # 24시간 (주 1회 추첨)
     '/명언': 3600,           # 1시간
     '/명령어': 3600,         # 1시간
@@ -94,8 +106,6 @@ MAX_CACHE_SIZE = 100  # 최대 100개 항목만 캐시
 
 # 명령어별 에러 메시지
 ERROR_MESSAGES = {
-    '/영화순위': '🎬 영화 정보를 가져오는 중 지연이 발생했습니다.\n잠시 후 다시 시도해주세요.',
-    '/전적': '🎮 LOL 전적 조회가 지연되고 있습니다.\nOP.GG 서버 상태를 확인중입니다.',
     '/주식': '📈 주식 시장 데이터 조회가 지연되고 있습니다.\n장 마감 시간일 수 있습니다.',
     '/블로그': '📝 블로그 검색이 지연되고 있습니다.\n검색어를 단순화해보세요.',
     '/네이버부동산': '🏠 부동산 정보 조회가 지연되고 있습니다.\n단지명을 정확히 입력해주세요.',
@@ -108,8 +118,6 @@ ERROR_MESSAGES = {
 # API 타임아웃 설정 (초 단위)
 API_TIMEOUTS = {
     # Selenium 사용 명령어 - 긴 타임아웃
-    '/영화순위': 15.0,          # 영화진흥위원회 API + 크롤링
-    '/전적': 10.0,              # LOL 전적 조회 (복잡한 크롤링)
     '/블로그': 8.0,             # 네이버 블로그 검색
     '/네이버부동산': 10.0,       # 부동산 정보 크롤링
     
@@ -135,9 +143,9 @@ API_TIMEOUTS = {
     # AI 대화 - 비활성화 상태
     '?': 8.0,                   # AI 대화 (현재 비활성화)
 
-    # URL 자동 요약 - 긴 타임아웃 (웹 스크래핑 + OpenAI API 2회 호출)
-    'http://': 20.0,            # HTTP URL 요약
-    'https://': 20.0,           # HTTPS URL 요약
+    # URL 자동 요약 - 병렬 처리로 타임아웃 단축
+    'http://': 15.0,            # HTTP URL 요약
+    'https://': 15.0,           # HTTPS URL 요약
 
     # 기본값
     'default': 4.0              # 기본 타임아웃
@@ -157,8 +165,10 @@ def get_command_cache_timeout(msg: str) -> int:
 def get_command_api_timeout(msg: str) -> float:
     """명령어별 API 타임아웃 결정"""
     # URL 자동 요약은 명시적으로 긴 타임아웃 적용
-    if msg.startswith('http://') or msg.startswith('https://'):
-        return 20.0
+    # 정규식으로 메시지 중간에 있는 URL도 감지
+    import re
+    if re.search(r'https?://[^\s<>"{}|\\^`\[\]]+', msg):
+        return 15.0  # 15초 (병렬 처리 최적화로 단축)
 
     for cmd, timeout in API_TIMEOUTS.items():
         if cmd != 'default' and msg.startswith(cmd):
@@ -233,17 +243,10 @@ def clean_message_for_kakao(msg: str) -> str:
         return ""
     
     # 1. 길이 제한 (카카오톡 제한)
-    # 영화순위는 전체 표시
-    # AI 응답은 1000자로 제한
-    if "KOBIS" not in msg:  # 영화순위가 아닌 경우
-        max_length = 1000
-        if len(msg) > max_length:
-            msg = msg[:max_length-3] + "..."  # 잘린 경우 ... 추가
-    # 영화순위는 5000자까지 허용
-    else:
-        max_length = 5000
-        if len(msg) > max_length:
-            msg = msg[:max_length] + "..."
+    # 1. 길이 제한 (카카오톡 제한)
+    max_length = 1000
+    if len(msg) > max_length:
+        msg = msg[:max_length-3] + "..."
     
     # 2. 문제가 될 수 있는 특수문자 정리
     # 일부 이모지는 메신저 봇에서 문제 발생 가능
@@ -260,9 +263,6 @@ def clean_message_for_kakao(msg: str) -> str:
         '🔟': '10.',
         '10️⃣': '10.',
         # 영화순위 관련 이모지 추가 제거
-        '🍿': '',  # 팝콘 이모지 제거
-        '📅': '',  # 달력 이모지 제거
-        '📊': '',  # 차트 이모지 제거
         # 카카오톡 메신저 봇에서 문제 될 수 있는 특수문자
         '·': '-',  # 중점을 하이픈으로 변경
         '「': '"',  # 특수 따옴표 변경
@@ -396,6 +396,12 @@ async def get_reply_with_timeout(room: str, sender: str, msg: str, timeout: floa
         logger.error(f"응답 생성 오류: {e}")
         return "⚠️ 처리 중 오류가 발생했습니다."
 
+
+# ========================================
+# URL 요약 비동기 처리 함수
+# ========================================
+# (비동기 처리 제거 - core/router.py에서 동기 처리로 복원)
+
 @app.post("/api/kakaotalk")
 async def handle_message(request: Request):
     """개선된 메시지 처리"""
@@ -481,7 +487,7 @@ async def handle_message(request: Request):
             # JSON 응답 생성 (ASCII 이스케이프 사용)
             json_str = json.dumps(response_data, ensure_ascii=True)
             return Response(content=json_str, media_type="application/json; charset=utf-8")
-        
+
         # 3. 타임아웃이 있는 응답 생성 (명령어별 동적 타임아웃)
         # URL 자동 요약 등 명령어별 타임아웃 자동 결정
         reply_msg = await get_reply_with_timeout(room, sender, msg)  # 타임아웃 자동 결정
@@ -497,14 +503,7 @@ async def handle_message(request: Request):
                 'reply_msg': reply_msg
             }
             
-            # 영화순위는 전체 로그 표시
-            if '/영화순위' in msg:
-                logger.info(f"[영화순위 전체 응답] 길이: {len(reply_msg)}")
-                logger.info(f"[영화순위 내용]: {reply_msg}")
-                logger.info(f"[영화순위 JSON 응답]: {json.dumps(response_data, ensure_ascii=True)}")
-            else:
-                # AI 응답 로그 비활성화 (AI 기능 비활성화됨)
-                logger.info(f"응답 생성: {room} - {reply_msg[:50]}...")
+            logger.info(f"응답 생성: {room} - {reply_msg[:50]}...")
         else:
             logger.info(f"응답 없음: {room}/{sender}/{msg[:30]}")
     
@@ -660,6 +659,37 @@ sys.path.append('.')  # 현재 디렉토리를 파이썬 경로에 추가
 # 차트 데이터 임시 캐시 (5분간 유지)
 chart_cache = {}
 chart_cache_timeout = 300  # 5분
+
+# ========================================
+# 스케줄 Polling 엔드포인트
+# ========================================
+
+@app.post("/api/poll")
+async def poll_pending_messages():
+    """스케줄된 메시지 폴링 엔드포인트 (메신저봇R용)"""
+    try:
+        from services.schedule_service import schedule_service
+
+        # 스케줄 메시지 가져오기
+        messages = schedule_service.get_pending_messages()
+
+        return {
+            "success": True,
+            "messages": messages,
+            "count": len(messages)
+        }
+    except Exception as e:
+        logger.error(f"폴링 오류: {e}")
+        return {
+            "success": False,
+            "messages": [],
+            "error": str(e)
+        }
+
+@app.get("/api/poll")
+async def poll_pending_messages_get():
+    """GET 방식 폴링 (테스트용)"""
+    return await poll_pending_messages()
 
 @app.get("/chart/exchange")
 async def get_exchange_chart():
@@ -891,9 +921,17 @@ async def startup_event():
     # 백그라운드 캐시 정리 작업 시작
     asyncio.create_task(cleanup_expired_cache())
     logger.info("✅ 백그라운드 캐시 정리 작업 시작 (5분 주기)")
+
+    # 스케줄러 초기화
+    try:
+        from services.schedule_service import schedule_service
+        schedule_service.initialize()
+        logger.info("✅ 스케줄 서비스 초기화 완료")
+    except Exception as e:
+        logger.error(f"❌ 스케줄 서비스 초기화 실패: {e}")
     
     # 중요 명령어 사전 캐싱
-    preload_commands = ['/영화순위', '/로또결과', '/명령어']
+    preload_commands = ['/로또결과', '/명령어']
     
     for cmd in preload_commands:
         try:
@@ -930,10 +968,19 @@ async def startup_event():
     logger.info(f"  · 명령어별 API 타임아웃: 1-15초")
     logger.info("="*60)
 
-@app.on_event("shutdown") 
+@app.on_event("shutdown")
 async def shutdown_event():
     """서버 종료시 실행"""
     executor.shutdown(wait=True)
+
+    # 스케줄러 종료
+    try:
+        from services.schedule_service import schedule_service
+        schedule_service.shutdown()
+        logger.info("스케줄 서비스 종료됨")
+    except Exception as e:
+        logger.error(f"스케줄 서비스 종료 오류: {e}")
+
     logger.info("서버 종료됨")
 
 if __name__ == "__main__":
