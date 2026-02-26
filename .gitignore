@@ -26,3 +26,17 @@ charts/
 
 # Logs
 *.log
+
+# Runtime data
+data/
+
+# Claude Code temp files
+.plan/
+tmpclaude-*
+nul
+
+# Test files (optional)
+test_url_extract.py
+
+# Claude local settings
+.claude/settings.local.json
