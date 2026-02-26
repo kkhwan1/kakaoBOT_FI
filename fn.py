@@ -1382,19 +1382,24 @@ def _fetch_content_parallel(url):
         proxy_headers['User-Agent'] = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
 
     # 병렬 실행
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        future_direct = executor.submit(_fetch_direct_request, url, headers)
-        future_proxy = executor.submit(_fetch_proxy_request, url, proxy_headers)
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            future_direct = executor.submit(_fetch_direct_request, url, headers)
+            future_proxy = executor.submit(_fetch_proxy_request, url, proxy_headers)
 
-        # as_completed는 Future 객체의 리스트를 받음 - 첫 성공 시 즉시 반환
-        for future in concurrent.futures.as_completed([future_direct, future_proxy], timeout=5):
-            try:
-                title, content = future.result(timeout=1)  # 이미 완료된 future는 즉시 반환
-                if title and content and len(content) >= 50:
-                    return title, content
-            except Exception as e:
-                log(f"요청 실패: {e}")
-                continue
+            # as_completed는 Future 객체의 리스트를 받음 - 첫 성공 시 즉시 반환
+            for future in concurrent.futures.as_completed([future_direct, future_proxy], timeout=5):
+                try:
+                    title, content = future.result(timeout=1)  # 이미 완료된 future는 즉시 반환
+                    if title and content and len(content) >= 50:
+                        return title, content
+                except Exception as e:
+                    log(f"요청 실패: {e}")
+                    continue
+    except concurrent.futures.TimeoutError:
+        log(f"콘텐츠 추출 타임아웃: {url}")
+    except Exception as e:
+        log(f"콘텐츠 추출 오류: {e}")
 
     return None, None
 
@@ -1402,6 +1407,9 @@ def _fetch_content_parallel(url):
 def _generate_summaries_parallel(title, content):
     """3줄 요약과 상세 요약을 병렬로 생성"""
     openai_client = get_openai_client()
+    if openai_client is None:
+        log("OpenAI 클라이언트 초기화 실패 (API 키 확인 필요)")
+        return "요약을 생성할 수 없습니다. (API 키 오류)", "요약을 생성할 수 없습니다."
 
     # 3줄 요약 프롬프트
     prompt_3lines = f"""다음 웹페이지 내용을 3개의 핵심 포인트로 극히 간결하게 정리해주세요. 각 포인트는 핵심 내용과 그에 대한 객관적인 의미/주요 영향을 포함하여, **각각 최대 1~2줄로 명료하게 요약해주세요.** 다양한 연결어와 어휘를 사용하고, **특히 '이는' 이라는 표현은 절대로 사용하지 말고,** 대신 '이것은', '이 점은', '해당 내용은'과 같이 다른 표현을 사용하거나 문맥에 맞게 자연스럽게 연결해주세요. 불필요한 세부 설명은 모두 생략하고, 전체 요약은 매우 짧아야 합니다. 다른 설명 없이 아래 번호 형식만 사용하세요:
@@ -1459,34 +1467,39 @@ def _generate_summaries_parallel(title, content):
 
 def web_summary(room: str, sender: str, msg: str):
     """웹페이지 3줄 요약 - 병렬 처리로 속도 최적화 (2-3초 목표)"""
-    url = msg.strip()
+    try:
+        url = msg.strip()
 
-    # 병렬로 콘텐츠 추출
-    title, content = _fetch_content_parallel(url)
+        # 병렬로 콘텐츠 추출
+        title, content = _fetch_content_parallel(url)
 
-    # 콘텐츠 추출 실패
-    if not title or not content or len(content) < 50:
-        return f"⚠️ 페이지 내용을 추출할 수 없습니다.\n{url}"
+        # 콘텐츠 추출 실패
+        if not title or not content or len(content) < 50:
+            return f"⚠️ 페이지 내용을 추출할 수 없습니다.\n{url}"
 
-    # 병렬로 요약 생성
-    summary_3lines, full_summary = _generate_summaries_parallel(title, content)
+        # 병렬로 요약 생성
+        summary_3lines, full_summary = _generate_summaries_parallel(title, content)
 
-    # 메시지 구성
-    send_msg = f'📝 웹페이지 요약\n'
-    send_msg += f'📌 {title}\n\n'
-    send_msg += f'💡 3줄 요약:\n{summary_3lines}\n\n'
+        # 메시지 구성
+        send_msg = f'📝 웹페이지 요약\n'
+        send_msg += f'📌 {title}\n\n'
+        send_msg += f'💡 3줄 요약:\n{summary_3lines}\n\n'
 
-    # 전체보기 구분선
-    send_msg += '🔗 전체 내용 보기 (클릭▼)'
-    send_msg += '\u180e' * 200  # 보이지 않는 공백 (축소)
+        # 전체보기 구분선
+        send_msg += '🔗 전체 내용 보기 (클릭▼)'
+        send_msg += '\u180e' * 200  # 보이지 않는 공백 (축소)
 
-    # 숨겨진 상세 정보
-    send_msg += '\n\n━━━━━━━━━━━━━━━\n'
-    send_msg += '📄 상세 요약\n\n'
-    send_msg += f'{full_summary}\n\n'
-    send_msg += f'🌐 원본 페이지:\n{url}'
+        # 숨겨진 상세 정보
+        send_msg += '\n\n━━━━━━━━━━━━━━━\n'
+        send_msg += '📄 상세 요약\n\n'
+        send_msg += f'{full_summary}\n\n'
+        send_msg += f'🌐 원본 페이지:\n{url}'
 
-    return send_msg
+        return send_msg
+
+    except Exception as e:
+        log(f"URL 요약 오류: {e}")
+        return f"⚠️ 링크 요약 중 오류가 발생했습니다.\n🔗 {msg.strip()}"
 
 
 def lol_record(room: str, sender: str, msg: str):
